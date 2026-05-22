@@ -40,7 +40,11 @@ async def lifespan(app: FastAPI):
     global db_pool
     # 1. Start Database Pool
     if DATABASE_URL:
-        db_pool = await asyncpg.create_pool(DATABASE_URL)
+        try:
+            db_pool = await asyncpg.create_pool(DATABASE_URL)
+            print("Database pool created successfully.")
+        except Exception as e:
+            print(f"Warning: Could not connect to database. Exception: {e}")
     
     # 2. Download and Load Models
     print("Loading models from Hugging Face...")
