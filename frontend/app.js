@@ -1,62 +1,96 @@
 // ===== CONFIGURATION =====
 const API_BASE = "https://ecommerce-rec-engine.onrender.com";
 
-// Product attributes mapping
-const PRODUCT_CATEGORIES = [
-  "Wireless Earbuds", "Bluetooth Speaker", "USB-C Hub", "Mechanical Keyboard",
-  "Gaming Mouse", "Webcam HD", "Portable SSD", "Phone Charger",
-  "Smart Watch", "Laptop Stand", "LED Monitor", "Tablet Case",
-  "Wireless Mouse", "Power Bank", "HDMI Cable", "Noise Cancelling Headphones",
-  "Smart Plug", "Ring Light", "Microphone", "Graphics Card",
-  "RAM Module", "Cooling Pad", "Router", "Ethernet Cable",
-  "Screen Protector", "Phone Case", "Stylus Pen", "VR Headset",
-  "Drone", "Action Camera", "Smart Display", "Fitness Tracker"
-];
-
-const BRANDS = [
-  "Sony", "Samsung", "Apple", "Bose", "JBL", "Logitech", "Razer",
-  "Anker", "Dell", "HP", "Lenovo", "Asus", "Corsair", "SteelSeries",
-  "HyperX", "Sennheiser", "Xiaomi", "OnePlus", "Google", "Microsoft"
-];
-
-// Seeded random number generator so an item always gets the same price/image
-function seededRandom(seed) {
-  let t = seed += 0x6D2B79F5;
-  t = Math.imul(t ^ t >>> 15, t | 1);
-  t ^= t + Math.imul(t ^ t >>> 7, t | 61);
-  return ((t ^ t >>> 14) >>> 0) / 4294967296;
-}
-
-function getProductDetails(itemId, customName = null) {
-  const catIdx = itemId % PRODUCT_CATEGORIES.length;
-  const brandIdx = itemId % BRANDS.length;
-  
-  const category = PRODUCT_CATEGORIES[catIdx];
-  const brand = BRANDS[brandIdx];
-  const name = customName ? customName : `${brand} ${category}`;
-  
-  // Predictable price, converted to Rupees (approx 83 INR per USD)
-  const basePriceUsd = 20 + seededRandom(itemId) * 180;
-  const priceInr = Math.floor(basePriceUsd * 83).toLocaleString('en-IN');
-  
-  // source.unsplash.com was shut down, causing random images (like strawberries).
-  // We'll use a reliable placeholder that displays the product name, 
-  // or a different image service if possible. For now, a clean stylized placeholder:
-  const shortName = name.split(' ').slice(0,2).join('+');
-  const imageUrl = `https://ui-avatars.com/api/?name=${shortName}&background=random&size=400&font-size=0.33`;
-  
-  return { category, brand, name, price: priceInr, imageUrl };
-}
-
-// ===== RANDOMIZED USER ID =====
-// Assign a random user ID between 1 and 5000 for the session
-const sessionUserId = Math.floor(Math.random() * 5000) + 1;
-
 // ===== NAVBAR SCROLL EFFECT =====
 const navbar = document.getElementById("navbar");
 window.addEventListener("scroll", () => {
   navbar.classList.toggle("scrolled", window.scrollY > 50);
 });
+
+// ===== DEAL BADGE HELPER =====
+function getDealBadgeHTML(deal) {
+  if (!deal) return "";
+  const badgeClass = `deal-badge deal-badge--${deal.badge}`;
+  return `
+    <div class="${badgeClass}">
+      <span class="deal-label">${deal.recommendation}</span>
+      <span class="deal-reason">${deal.reason}</span>
+      ${deal.savings_inr ? `<span class="deal-savings">Save ${deal.savings_inr}</span>` : ""}
+    </div>
+  `;
+}
+
+// ===== RENDER PRODUCT GRID =====
+function renderProductGrid(products) {
+  const grid = document.getElementById("productGrid");
+
+  if (!products || products.length === 0) {
+    grid.innerHTML = `
+      <div class="empty-state" style="grid-column:1/-1">
+        <div class="empty-icon">🔍</div>
+        <p>No products found. Try a different search term.</p>
+      </div>`;
+    return;
+  }
+
+  const listHTML = products.map((p, i) => {
+    const title = p.title || "Unknown Product";
+    const brand = p.brand || "";
+    const price = p.price || "Price not available";
+    const originalPrice = p.original_price && p.original_price !== p.price
+      ? `<span class="product-original-price">${p.original_price}</span>` : "";
+    const image = p.image || `https://ui-avatars.com/api/?name=${encodeURIComponent(title.slice(0, 20))}&background=1a1a2e&color=a78bfa&size=400&font-size=0.2`;
+    const url = p.url || `https://www.amazon.in/s?k=${encodeURIComponent(title)}`;
+    const rating = p.rating ? `<span class="product-rating">⭐ ${p.rating}</span>` : "";
+    const numRatings = p.num_ratings ? `<span class="product-num-ratings">(${Number(p.num_ratings).toLocaleString()})</span>` : "";
+    const primeBadge = p.is_prime ? `<span class="prime-badge">prime</span>` : "";
+    const dealHTML = getDealBadgeHTML(p.deal);
+
+    return `
+      <div class="product-card" style="animation: fadeInUp 0.4s ease-out ${i * 0.06}s both;">
+        <div class="product-image-wrap">
+          ${dealHTML}
+          ${primeBadge}
+          <img
+            class="product-image"
+            src="${image}"
+            onerror="this.onerror=null; this.src='https://ui-avatars.com/api/?name=${encodeURIComponent(title.slice(0,15))}&background=1a1a2e&color=a78bfa&size=400&font-size=0.2';"
+            alt="${title}"
+            loading="lazy"
+          />
+        </div>
+        <div class="product-info">
+          ${brand ? `<div class="product-brand">${brand}</div>` : ""}
+          <div class="product-name" title="${title}">${title}</div>
+          <div class="product-price-row">
+            <div class="product-price">${price}</div>
+            ${originalPrice}
+          </div>
+          ${rating || numRatings ? `<div class="product-meta">${rating} ${numRatings}</div>` : ""}
+          <div class="product-actions">
+            <a href="${url}" target="_blank" rel="noopener" class="btn-buy btn-amazon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M20.9 14.5c-.1-.1-1.4-1.1-2.9-.6-1 .3-1.5.9-1.5.9s-.6-1.2-1.8-1.6c-1-.3-2.2 0-3.3.9-1.2.9-1.7 2.3-1.5 3.8.3 1.5 1.2 2.7 2.6 3.3 1.4.6 3.1.4 4.3-.5 1.2-.9 1.7-2.4 1.4-3.8h.1s.7.5 1.5.4c.8-.1 1.5-.6 1.7-1.4.1-.4-.1-.9-.6-1.4zm-6.3 4.8c-.5.4-1.3.6-2 .3-.7-.3-1.1-.9-1.3-1.6-.2-.7 0-1.5.5-2 .5-.5 1.2-.7 1.9-.5.7.2 1.2.7 1.4 1.4.2.7 0 1.5-.5 2.1v.3z"/></svg>
+              Buy on Amazon
+            </a>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  grid.innerHTML = listHTML;
+}
+
+// ===== SHOW ERROR =====
+function showError(message) {
+  const grid = document.getElementById("productGrid");
+  grid.innerHTML = `
+    <div class="error-state" style="grid-column:1/-1">
+      <div class="error-icon">⚠️</div>
+      <p>${message}</p>
+      <button onclick="fetchRecommendations()" class="btn btn-primary" style="margin-top:1rem">Try Again</button>
+    </div>`;
+}
 
 // ===== FETCH RECOMMENDATIONS (Auto-Load) =====
 async function fetchRecommendations() {
@@ -68,22 +102,25 @@ async function fetchRecommendations() {
   grid.style.display = "none";
   loading.style.display = "flex";
 
+  title.textContent = "Trending Electronics";
+  desc.textContent = "Live deals & top picks from Amazon — updated in real-time.";
+
   try {
     const res = await fetch(`${API_BASE}/recommend`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: sessionUserId, limit: 12 }),
+      body: JSON.stringify({ limit: 12, category: "trending electronics India 2024" }),
     });
 
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    
-    title.textContent = "Recommended For You";
-    desc.textContent = "Dynamically generated based on your unique AI profile.";
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
 
-    renderProductGrid(data.recommended_items);
+    const data = await res.json();
+    renderProductGrid(data.results);
   } catch (err) {
-    grid.innerHTML = `<p style="color:var(--text-secondary); text-align:center; grid-column: 1/-1">Failed to load recommendations. ${err.message}</p>`;
+    showError(`Failed to load trending products: ${err.message}`);
   } finally {
     loading.style.display = "none";
     grid.style.display = "grid";
@@ -105,83 +142,44 @@ async function fetchSearch() {
 
   grid.style.display = "none";
   loading.style.display = "flex";
-  
-  title.textContent = `Search: "${query}"`;
-  desc.textContent = "Products ranked by relevance and personal affinity.";
+
+  title.textContent = `Results for "${query}"`;
+  desc.textContent = "Live search results from Amazon with deal analysis.";
 
   try {
     const res = await fetch(`${API_BASE}/search`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: query, user_id: sessionUserId, limit: 12 }),
+      body: JSON.stringify({ query: query, limit: 12 }),
     });
 
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
 
-    renderProductGrid(data.search_results, query);
+    const data = await res.json();
+    renderProductGrid(data.results);
   } catch (err) {
-    grid.innerHTML = `<p style="color:var(--text-secondary); text-align:center; grid-column: 1/-1">Search failed. ${err.message}</p>`;
+    showError(`Search failed: ${err.message}`);
   } finally {
     loading.style.display = "none";
     grid.style.display = "grid";
   }
 }
 
-// Search on Enter key
+// ===== SEARCH ON ENTER =====
 document.getElementById("searchInput").addEventListener("keypress", (e) => {
   if (e.key === "Enter") fetchSearch();
 });
 
-// ===== RENDER PRODUCT GRID =====
-function renderProductGrid(items, searchQuery = null) {
-  const grid = document.getElementById("productGrid");
-  
-  if (!items || items.length === 0) {
-    grid.innerHTML = `<p style="color:var(--text-secondary); text-align:center; grid-column: 1/-1">No products found.</p>`;
-    return;
-  }
-
-  const listHTML = items.map((item, i) => {
-    // If it's a search, inject the user's exact query into the first 2 results to make it feel responsive
-    let customName = null;
-    if (searchQuery && i < 2) {
-      customName = i === 0 ? searchQuery : `${BRANDS[item.item_id % BRANDS.length]} ${searchQuery}`;
-    }
-    
-    const details = getProductDetails(item.item_id, customName);
-    const score = item.score ?? 0;
-    
-    const amazonLink = `https://www.amazon.com/s?k=${encodeURIComponent(details.name)}`;
-    const ebayLink = `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(details.name)}`;
-    
-    // Fallback image generator (picsum) in case the avatar fails
-    const fallbackImg = `https://picsum.photos/seed/${item.item_id}/400/300`;
-
-    return `
-      <div class="product-card" style="animation: fadeInUp 0.4s ease-out ${i * 0.05}s both;">
-        <div class="product-image-wrap">
-          <div class="product-score">Match: ${(score * 100).toFixed(0)}%</div>
-          <img class="product-image" src="${details.imageUrl}" onerror="this.onerror=null;this.src='${fallbackImg}';" alt="${details.name}" loading="lazy" />
-        </div>
-        <div class="product-info">
-          <div class="product-brand">${details.brand}</div>
-          <div class="product-name">${details.name}</div>
-          <div class="product-price">₹${details.price}</div>
-          <div class="product-actions">
-            <a href="${amazonLink}" target="_blank" rel="noopener" class="btn-buy btn-amazon">Amazon</a>
-            <a href="${ebayLink}" target="_blank" rel="noopener" class="btn-buy btn-ebay">eBay</a>
-          </div>
-        </div>
-      </div>
-    `;
-  }).join("");
-
-  grid.innerHTML = listHTML;
+// ===== CATEGORY QUICK SEARCH =====
+function searchCategory(cat) {
+  document.getElementById("searchInput").value = cat;
+  fetchSearch();
 }
 
 // ===== INIT =====
 document.addEventListener("DOMContentLoaded", () => {
-  // Automatically fetch recommendations when the page loads
   fetchRecommendations();
 });

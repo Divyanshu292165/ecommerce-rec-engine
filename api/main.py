@@ -1,220 +1,211 @@
 import os
 import time
 import json
-import pickle
 import hashlib
 import asyncio
-from datetime import datetime
 from fastapi import FastAPI, Request, HTTPException
-
-# faiss-cpu may crash at C level (SIGILL) on CPUs without AVX2 support.
-# Import it safely so the rest of the app can still start.
-try:
-    import faiss
-    import numpy as np
-    FAISS_AVAILABLE = True
-except Exception as _faiss_err:
-    faiss = None
-    import numpy as np
-    FAISS_AVAILABLE = False
-    print(f"Warning: faiss could not be imported ({_faiss_err}). Running without vector search.")
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from huggingface_hub import hf_hub_download
-from upstash_redis.asyncio import Redis
-import asyncpg
-from prometheus_fastapi_instrumentator import Instrumentator
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
 from contextlib import asynccontextmanager
+import httpx
 
-# Environment Variables
-DATABASE_URL = os.getenv("DATABASE_URL")
-if DATABASE_URL and "sslmode" not in DATABASE_URL:
-    DATABASE_URL += "&sslmode=require" if "?" in DATABASE_URL else "?sslmode=require"
-
+# ─── Environment Variables ─────────────────────────────────────────────────────
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "")
 UPSTASH_REDIS_REST_URL = os.getenv("UPSTASH_REDIS_REST_URL")
 UPSTASH_REDIS_REST_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN")
-HF_REPO_ID = os.getenv("HF_REPO_ID", "your-username/ecommerce-rec-engine")
 
-# Rate Limiter
-limiter = Limiter(key_func=get_remote_address)
-
-# Global model store & asyncio queue
-models = {}
-db_pool = None
-interaction_queue = asyncio.Queue()
-
-# Initialize Async Redis client
+# ─── Optional Redis for caching ───────────────────────────────────────────────
 redis = None
 if UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN:
     try:
+        from upstash_redis.asyncio import Redis
         redis = Redis(url=UPSTASH_REDIS_REST_URL, token=UPSTASH_REDIS_REST_TOKEN)
     except Exception as e:
-        print(f"Warning: Failed to initialize Redis client: {e}")
+        print(f"Warning: Redis init failed: {e}")
 
-# --- Background Task to Batch-Write Interactions ---
-async def batch_interaction_writer():
-    print("Background batch_interaction_writer task started.")
-    while True:
-        try:
-            events = []
-            # Wait up to 5 seconds for the first interaction to arrive
-            try:
-                first_event = await asyncio.wait_for(interaction_queue.get(), timeout=5.0)
-                events.append(first_event)
-                interaction_queue.task_done()
-                
-                # Drain the queue immediately up to a batch size of 100
-                while not interaction_queue.empty() and len(events) < 100:
-                    event = interaction_queue.get_nowait()
-                    events.append(event)
-                    interaction_queue.task_done()
-            except asyncio.TimeoutError:
-                # 5 seconds elapsed with no interactions
-                pass
-            
-            # Write accumulated interactions to Supabase in a single batch
-            if events and db_pool:
-                try:
-                    async with db_pool.acquire() as conn:
-                        await conn.executemany(
-                            """
-                            INSERT INTO interactions (user_id, item_id, interaction_type, weight, timestamp)
-                            VALUES ($1, $2, $3, $4, $5)
-                            """,
-                            [
-                                (
-                                    e["user_id"],
-                                    e["item_id"],
-                                    e["interaction_type"],
-                                    e["weight"],
-                                    e["timestamp"]
-                                )
-                                for e in events
-                            ]
-                        )
-                    print(f"Batch-wrote {len(events)} interactions to Supabase.")
-                except Exception as db_err:
-                    print(f"Failed to batch write interactions to Supabase: {db_err}")
-        except Exception as e:
-            print(f"Error in batch_interaction_writer loop: {e}")
-            await asyncio.sleep(1)
+# ─── Optional rate limiter ─────────────────────────────────────────────────────
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.util import get_remote_address
+    from slowapi.errors import RateLimitExceeded
+    limiter = Limiter(key_func=get_remote_address)
+    SLOWAPI_AVAILABLE = True
+except Exception:
+    limiter = None
+    SLOWAPI_AVAILABLE = False
 
+# ─── RapidAPI Amazon Data Config ──────────────────────────────────────────────
+RAPIDAPI_HOST = "real-time-amazon-data.p.rapidapi.com"
+RAPIDAPI_BASE = f"https://{RAPIDAPI_HOST}"
+
+# USD → INR conversion rate (approximate)
+USD_TO_INR = 83.5
+
+# Trending electronics categories to fetch on homepage
+TRENDING_QUERIES = [
+    "trending smartphones 2024",
+    "best laptops 2024",
+    "wireless earbuds",
+    "gaming accessories",
+    "smart home devices",
+]
+
+
+def parse_price_to_inr(price_str: str) -> str:
+    """Convert Amazon price string like '$1,299.99' to formatted INR."""
+    if not price_str:
+        return None
+    try:
+        # Strip currency symbols, commas, spaces
+        cleaned = price_str.replace("$", "").replace(",", "").strip()
+        usd = float(cleaned)
+        inr = int(usd * USD_TO_INR)
+        return f"₹{inr:,}"
+    except Exception:
+        # If price is already in INR or unparseable, return as-is
+        if "₹" in price_str or "Rs" in price_str.lower():
+            return price_str
+        return price_str
+
+
+def analyze_deal(product: dict) -> dict:
+    """
+    Analyze whether to Buy Now or Wait based on discount data.
+    Returns a dict with: recommendation, badge, reason
+    """
+    original = product.get("product_original_price") or ""
+    current = product.get("product_price") or ""
+    stars = product.get("product_star_rating")
+    num_ratings = product.get("product_num_ratings") or 0
+
+    try:
+        orig_usd = float(original.replace("$", "").replace(",", "").strip()) if original else 0
+        curr_usd = float(current.replace("$", "").replace(",", "").strip()) if current else 0
+    except Exception:
+        orig_usd = 0
+        curr_usd = 0
+
+    discount_pct = 0
+    if orig_usd > 0 and curr_usd > 0 and orig_usd > curr_usd:
+        discount_pct = round((orig_usd - curr_usd) / orig_usd * 100)
+
+    try:
+        rating = float(stars) if stars else 0
+    except Exception:
+        rating = 0
+
+    # Deal scoring logic
+    if discount_pct >= 30:
+        return {
+            "recommendation": "🔥 BUY NOW",
+            "badge": "hot-deal",
+            "reason": f"{discount_pct}% off — exceptional deal",
+            "savings_inr": f"₹{int((orig_usd - curr_usd) * USD_TO_INR):,}" if orig_usd > 0 else None,
+        }
+    elif discount_pct >= 15:
+        return {
+            "recommendation": "✅ GOOD DEAL",
+            "badge": "good-deal",
+            "reason": f"{discount_pct}% off — solid savings",
+            "savings_inr": f"₹{int((orig_usd - curr_usd) * USD_TO_INR):,}" if orig_usd > 0 else None,
+        }
+    elif discount_pct > 0 and discount_pct < 15:
+        return {
+            "recommendation": "⏳ WAIT",
+            "badge": "wait",
+            "reason": f"Only {discount_pct}% off — price may drop more",
+            "savings_inr": None,
+        }
+    elif rating >= 4.5 and num_ratings > 1000:
+        return {
+            "recommendation": "⭐ TOP RATED",
+            "badge": "top-rated",
+            "reason": f"{rating}★ from {num_ratings:,} reviews",
+            "savings_inr": None,
+        }
+    else:
+        return {
+            "recommendation": "🛒 CHECK PRICE",
+            "badge": "neutral",
+            "reason": "Compare prices before buying",
+            "savings_inr": None,
+        }
+
+
+def map_product(p: dict) -> dict:
+    """Map a RapidAPI Amazon product to our frontend schema."""
+    price_inr = parse_price_to_inr(p.get("product_price"))
+    original_inr = parse_price_to_inr(p.get("product_original_price"))
+    deal = analyze_deal(p)
+
+    return {
+        "title": p.get("product_title", "Unknown Product"),
+        "brand": p.get("product_brand") or "",
+        "price": price_inr,
+        "original_price": original_inr,
+        "image": p.get("product_photo") or p.get("thumbnail"),
+        "url": p.get("product_url") or p.get("product_link"),
+        "rating": p.get("product_star_rating"),
+        "num_ratings": p.get("product_num_ratings"),
+        "deal": deal,
+        "is_prime": p.get("is_prime", False),
+        "badge": p.get("product_badge"),
+    }
+
+
+async def fetch_amazon_search(query: str, limit: int = 12) -> list:
+    """Fetch products from RapidAPI Amazon search endpoint."""
+    if not RAPIDAPI_KEY:
+        return []
+
+    headers = {
+        "X-RapidAPI-Key": RAPIDAPI_KEY,
+        "X-RapidAPI-Host": RAPIDAPI_HOST,
+    }
+    params = {
+        "query": query,
+        "page": "1",
+        "country": "IN",  # India — prices in INR natively
+        "sort_by": "RELEVANCE",
+        "product_condition": "ALL",
+        "is_prime": "false",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{RAPIDAPI_BASE}/search",
+                headers=headers,
+                params=params,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            products = data.get("data", {}).get("products", [])
+            return [map_product(p) for p in products[:limit]]
+    except Exception as e:
+        print(f"RapidAPI search error for '{query}': {e}")
+        return []
+
+
+# ─── Lifespan ─────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global db_pool
-    
-    # 1. Start Database Connection Pool with SSL and strictly restricted size
-    if DATABASE_URL:
-        try:
-            db_pool = await asyncpg.create_pool(
-                DATABASE_URL,
-                min_size=1,
-                max_size=5,
-                timeout=10          # don't hang startup waiting for TCP
-            )
-            print("Supabase connection pool initialized successfully (bounds: 1-5 connections).")
-        except Exception as e:
-            print(f"Warning: Could not connect to Supabase: {e}")
-    
-    # Start background writer task
-    bg_writer_task = asyncio.create_task(batch_interaction_writer())
-    
-    # 2. Download and Load Models from Hugging Face directly into /tmp
-    print("Loading models from Hugging Face Hub (cached in ephemeral /tmp)...")
-    try:
-        models["version"] = "v1.0"
-        
-        # Load FAISS Indexes
-        if FAISS_AVAILABLE:
-            try:
-                rec_idx_path = hf_hub_download(HF_REPO_ID, "rec_index.faiss", local_dir="/tmp")
-                models["rec_index"] = faiss.read_index(rec_idx_path)
-                print("Loaded rec_index.faiss successfully.")
-            except Exception as e:
-                print(f"Warning: Could not load rec_index.faiss ({e}). Compiling dummy FAISS index.")
-                rec_index = faiss.IndexFlatIP(64)
-                rec_index.add(np.random.randn(2005, 64).astype('float32'))
-                models["rec_index"] = rec_index
-        else:
-            print("Warning: Skipping FAISS index load — faiss unavailable.")
-            models["rec_index"] = None
-            
-        if FAISS_AVAILABLE:
-            try:
-                rag_idx_path = hf_hub_download(HF_REPO_ID, "rag_index.faiss", local_dir="/tmp")
-                models["rag_index"] = faiss.read_index(rag_idx_path)
-                print("Loaded rag_index.faiss successfully.")
-            except Exception as e:
-                print(f"Warning: Could not load rag_index.faiss ({e}). Reusing rec_index.")
-                models["rag_index"] = models.get("rec_index")
-        else:
-            models["rag_index"] = None
-        
-        # Load ALS collaborative filtering model
-        try:
-            als_path = hf_hub_download(HF_REPO_ID, "als_model.pkl", local_dir="/tmp")
-            with open(als_path, "rb") as f:
-                models["als"] = pickle.load(f)
-            print("Loaded als_model.pkl successfully.")
-        except Exception as e:
-            print(f"Warning: Could not load als_model.pkl ({e}).")
-            models["als"] = None
-            
-        # Load model factors/embeddings
-        try:
-            user_factors_path = hf_hub_download(HF_REPO_ID, "user_factors.npy", local_dir="/tmp")
-            models["user_factors"] = np.load(user_factors_path)
-            
-            item_factors_path = hf_hub_download(HF_REPO_ID, "item_factors.npy", local_dir="/tmp")
-            models["item_factors"] = np.load(item_factors_path)
-            print("Loaded latent user and item factor matrices successfully.")
-        except Exception as e:
-            print(f"Warning: Could not load matrix factor embeddings ({e}).")
-            models["user_factors"] = None
-            models["item_factors"] = None
-            
-        # Load item and user mapping tables
-        try:
-            item_map_path = hf_hub_download(HF_REPO_ID, "item_id_map.json", local_dir="/tmp")
-            with open(item_map_path, "r") as f:
-                models["item_map"] = {int(k): int(v) for k, v in json.load(f).items()}
-                models["item_map_rev"] = {v: k for k, v in models["item_map"].items()}
-                
-            user_map_path = hf_hub_download(HF_REPO_ID, "user_id_map.json", local_dir="/tmp")
-            with open(user_map_path, "r") as f:
-                models["user_map"] = {int(k): int(v) for k, v in json.load(f).items()}
-            print("Loaded item and user identifier maps successfully.")
-        except Exception as e:
-            print(f"Warning: Could not load identity mappings ({e}). Generating fallback mappings.")
-            models["item_map"] = {i: i for i in range(1, 2005)}
-            models["item_map_rev"] = {i: i for i in range(1, 2005)}
-            models["user_map"] = {i: i for i in range(1, 5005)}
-            
-        print("Model registry bootstrap complete.")
-    except Exception as e:
-        print(f"Critical error during lifespan startup: {e}")
-        
-    models["start_time"] = time.time()
-    
+    print("NeuralShop API starting up...")
+    app.state.start_time = time.time()
     yield
-    
-    # Shutdown background tasks and database pools
-    print("Shutting down API backend...")
-    bg_writer_task.cancel()
-    if db_pool:
-        await db_pool.close()
+    print("NeuralShop API shutting down.")
 
-app = FastAPI(title="RecEngine API", version="1.0.0", lifespan=lifespan)
+
+# ─── App Setup ────────────────────────────────────────────────────────────────
+app = FastAPI(title="NeuralShop RecEngine API", version="2.0.0", lifespan=lifespan)
+
+if SLOWAPI_AVAILABLE and limiter:
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 if os.path.isdir("frontend"):
     app.mount("/static", StaticFiles(directory="frontend", html=True))
-
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -223,231 +214,120 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-Instrumentator().instrument(app).expose(app)
+# Optional Prometheus metrics
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+    Instrumentator().instrument(app).expose(app)
+except Exception:
+    pass
 
-# --- Pydantic Models ---
-class RecommendRequest(BaseModel):
-    user_id: int = Field(..., gt=0)
-    limit: int = Field(default=10, ge=1, le=100)
 
-class SimilarRequest(BaseModel):
-    item_id: int = Field(..., gt=0)
-    limit: int = Field(default=10, ge=1, le=100)
-
+# ─── Pydantic Models ──────────────────────────────────────────────────────────
 class SearchRequest(BaseModel):
     query: str
-    user_id: int = Field(..., gt=0)
-    limit: int = Field(default=20, ge=1, le=100)
+    limit: int = Field(default=12, ge=1, le=50)
 
-class LogInteractionRequest(BaseModel):
-    user_id: int = Field(..., gt=0)
-    item_id: int = Field(..., gt=0)
-    interaction_type: str = Field(default="click")
-    weight: int = Field(default=1, ge=1)
 
-# --- Endpoints ---
+class RecommendRequest(BaseModel):
+    limit: int = Field(default=12, ge=1, le=50)
+    category: str = Field(default="trending electronics")
+
+
+# ─── Endpoints ────────────────────────────────────────────────────────────────
 @app.get("/ping")
 async def ping():
     return {"status": "ok"}
 
+
 @app.get("/health")
 async def health():
-    uptime = time.time() - models.get("start_time", time.time())
-    faiss_size = models["rec_index"].ntotal if FAISS_AVAILABLE and models.get("rec_index") else 0
+    uptime = time.time() - getattr(app.state, "start_time", time.time())
     return {
         "status": "ok",
-        "model_version": models.get("version", "unknown"),
-        "faiss_index_size": faiss_size,
-        "cache_hit_rate": 0.96, # Representing stable production metrics
-        "uptime_seconds": int(uptime)
+        "version": "2.0.0",
+        "rapidapi_configured": bool(RAPIDAPI_KEY),
+        "uptime_seconds": int(uptime),
     }
 
-@app.post("/recommend")
-@limiter.limit("100/minute")
-async def recommend(request: Request, req: RecommendRequest):
-    start_ts = time.time()
-    version = models.get("version", "v1.0")
-    cache_key = f"rec:{req.user_id}:{version}"
-    
-    # 1. Try to serve from Upstash Redis Caching
-    if redis:
-        try:
-            cached_bytes = await redis.get(cache_key)
-            if cached_bytes:
-                recs = json.loads(cached_bytes)
-                return {
-                    "recommended_items": recs,
-                    "response_time_ms": int((time.time() - start_ts) * 1000),
-                    "model_version": version,
-                    "cache_hit": True
-                }
-        except Exception as e:
-            print(f"Warning: Upstash Redis GET failed: {e}")
-            
-    # 2. Collaborative Filtering & Rec Logic
-    recs = []
-    try:
-        user_id_mapped = models.get("user_map", {}).get(req.user_id, req.user_id)
-        # Check if we have ALS model and embeddings loaded
-        # Check if FAISS index is available
-        if not FAISS_AVAILABLE or models.get("rec_index") is None:
-            # Fallback to simple popular items
-            recs = [{"item_id": i, "score": round(0.99 - (i/1000), 4)} for i in range(1, req.limit + 1)]
-        else:
-            # Proceed with collaborative filtering
-            if models.get("als") and models.get("user_factors") is not None:
-                user_vector = models["user_factors"][user_id_mapped].reshape(1, -1).astype('float32')
-                distances, indices = models["rec_index"].search(user_vector, req.limit)
-                for rank, (idx, dist) in enumerate(zip(indices[0], distances[0])):
-                    raw_item_id = models.get("item_map_rev", {}).get(idx, int(idx))
-                    recs.append({"item_id": raw_item_id, "score": float(dist)})
-            else:
-                recs = [{"item_id": i, "score": round(0.99 - (i/1000), 4)} for i in range(1, req.limit + 1)]
-    except Exception as e:
-        print(f"Warning: Recommendation generation fallback triggered: {e}")
-        recs = [{"item_id": i, "score": round(0.95 - (i/1000), 4)} for i in range(1, req.limit + 1)]
-
-    # 3. Log interaction to memory queue asynchronously
-    if recs:
-        try:
-            await interaction_queue.put({
-                "user_id": req.user_id,
-                "item_id": recs[0]["item_id"],
-                "interaction_type": "recommendation",
-                "weight": 1,
-                "timestamp": datetime.utcnow()
-            })
-        except Exception as e:
-            print(f"Warning: Could not queue interaction: {e}")
-
-    # 4. Cache recommendations asynchronously in Upstash Redis
-    if redis:
-        try:
-            await redis.set(cache_key, json.dumps(recs), ex=3600)
-        except Exception as e:
-            print(f"Warning: Upstash Redis SET failed: {e}")
-            
-    return {
-        "recommended_items": recs,
-        "response_time_ms": int((time.time() - start_ts) * 1000),
-        "model_version": version,
-        "cache_hit": False
-    }
-
-@app.post("/similar")
-@limiter.limit("100/minute")
-async def similar(request: Request, req: SimilarRequest):
-    start_ts = time.time()
-    cache_key = f"similar:{req.item_id}"
-    
-    if redis:
-        try:
-            cached_bytes = await redis.get(cache_key)
-            if cached_bytes:
-                similar_items = json.loads(cached_bytes)
-                return {
-                    "similar_items": similar_items,
-                    "response_time_ms": int((time.time() - start_ts) * 1000),
-                    "cache_hit": True
-                }
-        except Exception as e:
-            print(f"Warning: Upstash Redis GET failed: {e}")
-            
-    similar_items = []
-    try:
-        item_id_mapped = models.get("item_map", {}).get(req.item_id, req.item_id)
-        if not FAISS_AVAILABLE or models.get("rec_index") is None:
-            similar_items = [{"item_id": i + req.item_id, "score": round(0.95 - (i/100), 4)} for i in range(1, req.limit + 1)]
-        else:
-            # Normal similar logic with FAISS
-            if models.get("item_factors") is not None:
-                item_vector = models["item_factors"][item_id_mapped].reshape(1, -1).astype('float32')
-                distances, indices = models["rec_index"].search(item_vector, req.limit + 1)
-                for rank, (idx, dist) in enumerate(zip(indices[0], distances[0])):
-                    raw_item_id = models.get("item_map_rev", {}).get(idx, int(idx))
-                    if raw_item_id == req.item_id:
-                        continue
-                    similar_items.append({"item_id": raw_item_id, "score": float(dist)})
-                    if len(similar_items) >= req.limit:
-                        break
-            else:
-                similar_items = [{"item_id": i + req.item_id, "score": round(0.95 - (i/100), 4)} for i in range(1, req.limit + 1)]
-    except Exception as e:
-        print(f"Warning: Similar search fallback triggered: {e}")
-        similar_items = [{"item_id": i + req.item_id, "score": round(0.90 - (i/100), 4)} for i in range(1, req.limit + 1)]
-
-    if redis:
-        try:
-            await redis.set(cache_key, json.dumps(similar_items), ex=86400)
-        except Exception as e:
-            print(f"Warning: Upstash Redis SET failed: {e}")
-            
-    return {
-        "similar_items": similar_items,
-        "response_time_ms": int((time.time() - start_ts) * 1000),
-        "cache_hit": False
-    }
 
 @app.post("/search")
-@limiter.limit("100/minute")
 async def search(request: Request, req: SearchRequest):
+    """Search Amazon for products matching the query."""
     start_ts = time.time()
-    cache_key = f"search:{req.user_id}:{hashlib.sha256(req.query.encode()).hexdigest()}"
+    cache_key = f"search_v2:{hashlib.sha256(req.query.encode()).hexdigest()[:16]}"
+
+    # Try Redis cache first
+    if redis:
+        try:
+            cached = await redis.get(cache_key)
+            if cached:
+                return {
+                    "results": json.loads(cached),
+                    "query": req.query,
+                    "response_time_ms": int((time.time() - start_ts) * 1000),
+                    "source": "cache",
+                }
+        except Exception as e:
+            print(f"Redis GET error: {e}")
+
+    products = await fetch_amazon_search(req.query, req.limit)
+
+    if not products:
+        raise HTTPException(
+            status_code=503,
+            detail="Could not fetch products. Please check RAPIDAPI_KEY is set in environment variables.",
+        )
+
+    # Cache for 10 minutes
+    if redis:
+        try:
+            await redis.set(cache_key, json.dumps(products), ex=600)
+        except Exception as e:
+            print(f"Redis SET error: {e}")
+
+    return {
+        "results": products,
+        "query": req.query,
+        "response_time_ms": int((time.time() - start_ts) * 1000),
+        "source": "amazon",
+    }
+
+
+@app.post("/recommend")
+async def recommend(request: Request, req: RecommendRequest):
+    """Fetch trending/popular electronics from Amazon as homepage recommendations."""
+    start_ts = time.time()
+    cache_key = f"recommend_v2:{req.category[:30]}"
 
     if redis:
         try:
             cached = await redis.get(cache_key)
             if cached:
                 return {
-                    "search_results": json.loads(cached),
+                    "results": json.loads(cached),
                     "response_time_ms": int((time.time() - start_ts) * 1000),
-                    "cache_hit": True
+                    "source": "cache",
                 }
         except Exception as e:
-            print(f"Warning: Upstash Redis GET failed: {e}")
+            print(f"Redis GET error: {e}")
 
-    search_results = []
-    try:
-        user_id_mapped = models.get("user_map", {}).get(req.user_id, req.user_id)
-        if not FAISS_AVAILABLE or models.get("rec_index") is None:
-            search_results = [{"item_id": i, "score": round(0.98 - (i/1000), 4)} for i in range(1, req.limit + 1)]
-        else:
-            if models.get("user_factors") is not None:
-                user_vector = models["user_factors"][user_id_mapped].reshape(1, -1).astype('float32')
-                distances, indices = models["rec_index"].search(user_vector, req.limit)
-                for idx, dist in zip(indices[0], distances[0]):
-                    raw_item_id = models.get("item_map_rev", {}).get(idx, int(idx))
-                    search_results.append({"item_id": raw_item_id, "score": float(dist)})
-            else:
-                search_results = [{"item_id": i, "score": round(0.98 - (i/1000), 4)} for i in range(1, req.limit + 1)]
-    except Exception as e:
-        print(f"Warning: Search personalization failed: {e}")
-        search_results = [{"item_id": i, "score": round(0.88 - (i / 1000), 4)} for i in range(1, req.limit + 1)]
+    products = await fetch_amazon_search(req.category, req.limit)
 
+    if not products:
+        raise HTTPException(
+            status_code=503,
+            detail="Could not fetch recommendations. Please check RAPIDAPI_KEY is set in environment variables.",
+        )
+
+    # Cache trending for 30 minutes
     if redis:
         try:
-            await redis.set(cache_key, json.dumps(search_results), ex=86400)
+            await redis.set(cache_key, json.dumps(products), ex=1800)
         except Exception as e:
-            print(f"Warning: Upstash Redis SET failed: {e}")
+            print(f"Redis SET error: {e}")
 
     return {
-        "search_results": search_results,
+        "results": products,
         "response_time_ms": int((time.time() - start_ts) * 1000),
-        "cache_hit": False
+        "source": "amazon",
     }
-
-@app.post("/interaction")
-@limiter.limit("200/minute")
-async def log_interaction(request: Request, req: LogInteractionRequest):
-    # Public endpoint to log custom user clicks/purchases asynchronously
-    try:
-        await interaction_queue.put({
-            "user_id": req.user_id,
-            "item_id": req.item_id,
-            "interaction_type": req.interaction_type,
-            "weight": req.weight,
-            "timestamp": datetime.utcnow()
-        })
-        return {"status": "interaction_queued"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to queue interaction: {e}")

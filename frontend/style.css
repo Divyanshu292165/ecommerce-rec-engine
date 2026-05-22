@@ -282,6 +282,30 @@ input { font-family: inherit; outline: none; }
   gap: 32px;
 }
 
+/* Deal badge styles */
+.deal-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  backdrop-filter: blur(4px);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 5;
+}
+.deal-badge--hot-deal { background: rgba(255,69,0,0.85); }
+.deal-badge--good-deal { background: rgba(255,165,0,0.85); }
+.deal-badge--wait { background: rgba(128,128,128,0.85); }
+.deal-badge--top-rated { background: rgba(34,139,34,0.85); }
+.deal-badge--neutral { background: rgba(0,0,0,0.6); }
+.deal-label { font-weight: 700; }
+.deal-reason, .deal-savings { font-size: 10px; }
+
 /* Product Card */
 .product-card {
   background: var(--bg-card);
