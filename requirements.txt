@@ -12,4 +12,3 @@ asyncpg
 psycopg2-binary
 slowapi
 prometheus-fastapi-instrumentator
-sentence-transformers

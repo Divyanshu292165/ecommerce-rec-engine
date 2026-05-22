@@ -7,6 +7,7 @@ import faiss
 import numpy as np
 import asyncio
 from datetime import datetime
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -191,7 +192,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="RecEngine API", version="1.0.0", lifespan=lifespan)
 
-app.mount("/static", StaticFiles(directory="frontend", html=True))
+if os.path.isdir("frontend"):
+    app.mount("/static", StaticFiles(directory="frontend", html=True))
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
