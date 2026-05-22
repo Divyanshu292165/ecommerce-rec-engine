@@ -189,12 +189,21 @@ function buildResultsHTML(items, latency, modelVersion, cacheStatus) {
       const score = item.score ?? 0;
       const pct = Math.max(5, Math.round(score * 100));
       const name = getProductName(item.item_id);
+      // Simulated price between $20‑$120
+      const price = (20 + Math.random() * 100).toFixed(2);
+      const amazonLink = `https://www.amazon.com/s?k=${encodeURIComponent(name)}`;
+      const ebayLink = `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(name)}`;
       return `
         <li class="result-item" style="animation: fadeInUp 0.3s ease-out ${i * 0.05}s both;">
           <div class="result-rank">${i + 1}</div>
           <div class="result-info">
             <div class="result-name">${name}</div>
             <div class="result-id">Item #${item.item_id}</div>
+            <div class="result-price">💲 $${price}</div>
+            <div class="result-links">
+              <a href="${amazonLink}" target="_blank" rel="noopener">Amazon</a> |
+              <a href="${ebayLink}" target="_blank" rel="noopener">eBay</a>
+            </div>
           </div>
           <div class="result-score-bar">
             <div class="result-score-value">${score.toFixed(4)}</div>
