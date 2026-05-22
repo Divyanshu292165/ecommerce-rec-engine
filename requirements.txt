@@ -4,7 +4,8 @@ pydantic
 pydantic-settings
 huggingface-hub
 faiss-cpu
-torch
+implicit
+scipy
 numpy
 upstash-redis
 asyncpg
