@@ -367,35 +367,19 @@ async def similar(request: Request, req: SimilarRequest):
         "cache_hit": False
     }
 
-@app.post("/search")
-@limiter.limit("100/minute")
-async def search(request: Request, req: SearchRequest):
-    start_ts = time.time()
-    
-    # Semantic Search mixed with personalized vector scoring
-    search_results = []
-    try:
-        user_id_mapped = models.get("user_map", {}).get(req.user_id, req.user_id)
-        if models.get("user_factors") is not None:
-            user_vector = models["user_factors"][user_id_mapped].reshape(1, -1).astype('float32')
-            # Search using personalized RAG index
-            distances, indices = models["rag_index"].search(user_vector, req.limit)
-            
-            for idx, dist in zip(indices[0], distances[0]):
-                raw_item_id = models.get("item_map_rev", {}).get(idx, int(idx))
-                search_results.append({
-                    "item_id": raw_item_id,
-                    "score": float(dist)
-                })
-        else:
-            search_results = [{"item_id": i, "score": round(0.98 - (i/1000), 4)} for i in range(1, req.limit + 1)]
-    except Exception as e:
-        print(f"Warning: Search personalization failed: {e}")
-        search_results = [{"item_id": i, "score": round(0.88 - (i/1000), 4)} for i in range(1, req.limit + 1)]
-        
+import hashlib
+
+    # ... inside search endpoint after generating search_results
+    cache_key = f"search:{req.user_id}:{hashlib.sha256(req.query.encode()).hexdigest()}"
+    if redis:
+        try:
+            await redis.set(cache_key, json.dumps(search_results), ex=86400)
+        except Exception as e:
+            print(f"Warning: Upstash Redis SET failed: {e}")
     return {
         "search_results": search_results,
-        "response_time_ms": int((time.time() - start_ts) * 1000)
+        "response_time_ms": int((time.time() - start_ts) * 1000),
+        "cache_hit": False
     }
 
 @app.post("/interaction")

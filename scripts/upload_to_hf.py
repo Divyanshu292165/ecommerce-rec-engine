@@ -17,6 +17,7 @@ def main():
     files = [
         "rec_index.faiss",
         "rag_index.faiss",
+        "product_rag_chunks.npy",
         "als_model.pkl",
         "item_factors.npy",
         "user_factors.npy",
