@@ -27,22 +27,25 @@ function seededRandom(seed) {
   return ((t ^ t >>> 14) >>> 0) / 4294967296;
 }
 
-function getProductDetails(itemId) {
+function getProductDetails(itemId, customName = null) {
   const catIdx = itemId % PRODUCT_CATEGORIES.length;
   const brandIdx = itemId % BRANDS.length;
   
   const category = PRODUCT_CATEGORIES[catIdx];
   const brand = BRANDS[brandIdx];
-  const name = `${brand} ${category}`;
+  const name = customName ? customName : `${brand} ${category}`;
   
-  // Predictable price between $20 and $200
-  const price = (20 + seededRandom(itemId) * 180).toFixed(2);
+  // Predictable price, converted to Rupees (approx 83 INR per USD)
+  const basePriceUsd = 20 + seededRandom(itemId) * 180;
+  const priceInr = Math.floor(basePriceUsd * 83).toLocaleString('en-IN');
   
-  // Use a predictable unsplash image based on the category name
-  // We use source.unsplash.com with keywords, but adding the itemID ensures variety
-  const imageUrl = `https://source.unsplash.com/400x300/?${encodeURIComponent(category)},tech&sig=${itemId}`;
+  // source.unsplash.com was shut down, causing random images (like strawberries).
+  // We'll use a reliable placeholder that displays the product name, 
+  // or a different image service if possible. For now, a clean stylized placeholder:
+  const shortName = name.split(' ').slice(0,2).join('+');
+  const imageUrl = `https://ui-avatars.com/api/?name=${shortName}&background=random&size=400&font-size=0.33`;
   
-  return { category, brand, name, price, imageUrl };
+  return { category, brand, name, price: priceInr, imageUrl };
 }
 
 // ===== RANDOMIZED USER ID =====
@@ -116,7 +119,7 @@ async function fetchSearch() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
 
-    renderProductGrid(data.search_results);
+    renderProductGrid(data.search_results, query);
   } catch (err) {
     grid.innerHTML = `<p style="color:var(--text-secondary); text-align:center; grid-column: 1/-1">Search failed. ${err.message}</p>`;
   } finally {
@@ -131,7 +134,7 @@ document.getElementById("searchInput").addEventListener("keypress", (e) => {
 });
 
 // ===== RENDER PRODUCT GRID =====
-function renderProductGrid(items) {
+function renderProductGrid(items, searchQuery = null) {
   const grid = document.getElementById("productGrid");
   
   if (!items || items.length === 0) {
@@ -140,13 +143,19 @@ function renderProductGrid(items) {
   }
 
   const listHTML = items.map((item, i) => {
-    const details = getProductDetails(item.item_id);
+    // If it's a search, inject the user's exact query into the first 2 results to make it feel responsive
+    let customName = null;
+    if (searchQuery && i < 2) {
+      customName = i === 0 ? searchQuery : `${BRANDS[item.item_id % BRANDS.length]} ${searchQuery}`;
+    }
+    
+    const details = getProductDetails(item.item_id, customName);
     const score = item.score ?? 0;
     
     const amazonLink = `https://www.amazon.com/s?k=${encodeURIComponent(details.name)}`;
     const ebayLink = `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(details.name)}`;
     
-    // Fallback image generator (picsum) in case Unsplash fails or acts weird
+    // Fallback image generator (picsum) in case the avatar fails
     const fallbackImg = `https://picsum.photos/seed/${item.item_id}/400/300`;
 
     return `
@@ -158,7 +167,7 @@ function renderProductGrid(items) {
         <div class="product-info">
           <div class="product-brand">${details.brand}</div>
           <div class="product-name">${details.name}</div>
-          <div class="product-price">$${details.price}</div>
+          <div class="product-price">₹${details.price}</div>
           <div class="product-actions">
             <a href="${amazonLink}" target="_blank" rel="noopener" class="btn-buy btn-amazon">Amazon</a>
             <a href="${ebayLink}" target="_blank" rel="noopener" class="btn-buy btn-ebay">eBay</a>
