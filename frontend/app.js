@@ -85,11 +85,24 @@ function renderProductGrid(products) {
 function showError(message) {
   const grid = document.getElementById("productGrid");
   grid.innerHTML = `
-    <div class="error-state" style="grid-column:1/-1">
-      <div class="error-icon">⚠️</div>
-      <p>${message}</p>
-      <button onclick="fetchRecommendations()" class="btn btn-primary" style="margin-top:1rem">Try Again</button>
+    <div class="error-state" style="grid-column:1/-1; text-align:center; padding:60px 20px;">
+      <div style="font-size:3rem; margin-bottom:16px;">⚠️</div>
+      <p style="color:#f87171; font-size:16px; margin-bottom:8px; font-weight:600">Something went wrong</p>
+      <p style="color:#94a3b8; font-size:14px; margin-bottom:24px;">${message}</p>
+      <button onclick="fetchRecommendations()" class="btn btn-primary" style="margin-top:0.5rem">Try Again</button>
     </div>`;
+}
+
+// ===== SAFE ERROR MESSAGE EXTRACTOR =====
+async function getErrorMessage(res) {
+  try {
+    const data = await res.json();
+    if (data && typeof data.detail === 'string') return data.detail;
+    if (data && data.detail) return JSON.stringify(data.detail);
+    return `HTTP ${res.status}`;
+  } catch {
+    return `HTTP ${res.status}`;
+  }
 }
 
 // ===== FETCH RECOMMENDATIONS (Auto-Load) =====
@@ -113,14 +126,17 @@ async function fetchRecommendations() {
     });
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || `HTTP ${res.status}`);
+      const msg = await getErrorMessage(res);
+      throw new Error(msg);
     }
 
     const data = await res.json();
     renderProductGrid(data.results);
   } catch (err) {
-    showError(`Failed to load trending products: ${err.message}`);
+    const msg = err instanceof TypeError
+      ? 'Network error — check your internet connection or the API may be down.'
+      : (err.message || 'Unknown error');
+    showError(msg);
   } finally {
     loading.style.display = "none";
     grid.style.display = "grid";
@@ -154,14 +170,17 @@ async function fetchSearch() {
     });
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || `HTTP ${res.status}`);
+      const msg = await getErrorMessage(res);
+      throw new Error(msg);
     }
 
     const data = await res.json();
     renderProductGrid(data.results);
   } catch (err) {
-    showError(`Search failed: ${err.message}`);
+    const msg = err instanceof TypeError
+      ? 'Network error — check your internet connection or the API may be down.'
+      : (err.message || 'Unknown error');
+    showError(msg);
   } finally {
     loading.style.display = "none";
     grid.style.display = "grid";
