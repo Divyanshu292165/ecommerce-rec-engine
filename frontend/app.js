@@ -1,8 +1,7 @@
 // ===== CONFIGURATION =====
-// ⚠️ IMPORTANT: Replace this with your actual Render URL after deployment!
 const API_BASE = "https://ecommerce-rec-engine.onrender.com";
 
-// Product names for demo display
+// Product attributes mapping
 const PRODUCT_CATEGORIES = [
   "Wireless Earbuds", "Bluetooth Speaker", "USB-C Hub", "Mechanical Keyboard",
   "Gaming Mouse", "Webcam HD", "Portable SSD", "Phone Charger",
@@ -20,11 +19,35 @@ const BRANDS = [
   "HyperX", "Sennheiser", "Xiaomi", "OnePlus", "Google", "Microsoft"
 ];
 
-function getProductName(itemId) {
+// Seeded random number generator so an item always gets the same price/image
+function seededRandom(seed) {
+  let t = seed += 0x6D2B79F5;
+  t = Math.imul(t ^ t >>> 15, t | 1);
+  t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+  return ((t ^ t >>> 14) >>> 0) / 4294967296;
+}
+
+function getProductDetails(itemId) {
   const catIdx = itemId % PRODUCT_CATEGORIES.length;
   const brandIdx = itemId % BRANDS.length;
-  return `${BRANDS[brandIdx]} ${PRODUCT_CATEGORIES[catIdx]}`;
+  
+  const category = PRODUCT_CATEGORIES[catIdx];
+  const brand = BRANDS[brandIdx];
+  const name = `${brand} ${category}`;
+  
+  // Predictable price between $20 and $200
+  const price = (20 + seededRandom(itemId) * 180).toFixed(2);
+  
+  // Use a predictable unsplash image based on the category name
+  // We use source.unsplash.com with keywords, but adding the itemID ensures variety
+  const imageUrl = `https://source.unsplash.com/400x300/?${encodeURIComponent(category)},tech&sig=${itemId}`;
+  
+  return { category, brand, name, price, imageUrl };
 }
+
+// ===== RANDOMIZED USER ID =====
+// Assign a random user ID between 1 and 5000 for the session
+const sessionUserId = Math.floor(Math.random() * 5000) + 1;
 
 // ===== NAVBAR SCROLL EFFECT =====
 const navbar = document.getElementById("navbar");
@@ -32,229 +55,124 @@ window.addEventListener("scroll", () => {
   navbar.classList.toggle("scrolled", window.scrollY > 50);
 });
 
-// ===== API STATUS CHECK =====
-async function checkApiStatus() {
-  const dot = document.querySelector(".status-dot");
-  const text = document.querySelector(".status-text");
-
-  try {
-    const res = await fetch(`${API_BASE}/ping`, { signal: AbortSignal.timeout(10000) });
-    if (res.ok) {
-      dot.classList.add("online");
-      dot.classList.remove("offline");
-      text.textContent = "API Online";
-    } else {
-      throw new Error("Not OK");
-    }
-  } catch {
-    dot.classList.add("offline");
-    dot.classList.remove("online");
-    text.textContent = "API Offline";
-  }
-}
-
-// ===== FETCH RECOMMENDATIONS =====
+// ===== FETCH RECOMMENDATIONS (Auto-Load) =====
 async function fetchRecommendations() {
-  const btn = document.getElementById("btnRecommend");
-  const results = document.getElementById("recResults");
-  const userId = parseInt(document.getElementById("recUserId").value);
-  const limit = parseInt(document.getElementById("recLimit").value);
+  const grid = document.getElementById("productGrid");
+  const loading = document.getElementById("loadingState");
+  const title = document.getElementById("storeTitle");
+  const desc = document.getElementById("storeDesc");
 
-  btn.classList.add("loading");
+  grid.style.display = "none";
+  loading.style.display = "flex";
 
   try {
     const res = await fetch(`${API_BASE}/recommend`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: userId, limit: limit }),
+      body: JSON.stringify({ user_id: sessionUserId, limit: 12 }),
     });
 
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    
+    title.textContent = "Recommended For You";
+    desc.textContent = "Dynamically generated based on your unique AI profile.";
 
-    results.innerHTML = buildResultsHTML(
-      data.recommended_items,
-      `${data.response_time_ms}ms`,
-      data.model_version,
-      data.cache_hit ? "HIT" : "MISS"
-    );
+    renderProductGrid(data.recommended_items);
   } catch (err) {
-    results.innerHTML = buildErrorHTML(err.message);
+    grid.innerHTML = `<p style="color:var(--text-secondary); text-align:center; grid-column: 1/-1">Failed to load recommendations. ${err.message}</p>`;
+  } finally {
+    loading.style.display = "none";
+    grid.style.display = "grid";
   }
-
-  btn.classList.remove("loading");
-}
-
-// ===== FETCH SIMILAR =====
-async function fetchSimilar() {
-  const btn = document.getElementById("btnSimilar");
-  const results = document.getElementById("simResults");
-  const itemId = parseInt(document.getElementById("simItemId").value);
-  const limit = parseInt(document.getElementById("simLimit").value);
-
-  btn.classList.add("loading");
-
-  try {
-    const res = await fetch(`${API_BASE}/similar`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ item_id: itemId, limit: limit }),
-    });
-
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-
-    results.innerHTML = buildResultsHTML(
-      data.similar_items,
-      `${data.response_time_ms}ms`,
-      null,
-      null
-    );
-  } catch (err) {
-    results.innerHTML = buildErrorHTML(err.message);
-  }
-
-  btn.classList.remove("loading");
 }
 
 // ===== FETCH SEARCH =====
 async function fetchSearch() {
-  const btn = document.getElementById("btnSearch");
-  const results = document.getElementById("searchResults");
-  const query = document.getElementById("searchQuery").value;
-  const userId = parseInt(document.getElementById("searchUserId").value);
+  const grid = document.getElementById("productGrid");
+  const loading = document.getElementById("loadingState");
+  const query = document.getElementById("searchInput").value.trim();
+  const title = document.getElementById("storeTitle");
+  const desc = document.getElementById("storeDesc");
 
-  btn.classList.add("loading");
+  if (!query) {
+    fetchRecommendations();
+    return;
+  }
+
+  grid.style.display = "none";
+  loading.style.display = "flex";
+  
+  title.textContent = `Search: "${query}"`;
+  desc.textContent = "Products ranked by relevance and personal affinity.";
 
   try {
     const res = await fetch(`${API_BASE}/search`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: query, user_id: userId, limit: 20 }),
+      body: JSON.stringify({ query: query, user_id: sessionUserId, limit: 12 }),
     });
 
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
 
-    results.innerHTML = buildResultsHTML(
-      data.search_results,
-      `${data.response_time_ms}ms`,
-      null,
-      null
-    );
+    renderProductGrid(data.search_results);
   } catch (err) {
-    results.innerHTML = buildErrorHTML(err.message);
-  }
-
-  btn.classList.remove("loading");
-}
-
-// ===== FETCH HEALTH =====
-async function fetchHealth() {
-  try {
-    const res = await fetch(`${API_BASE}/health`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-
-    document.getElementById("healthStatus").textContent = data.status?.toUpperCase() || "OK";
-    document.getElementById("healthModel").textContent = data.model_version || "—";
-    document.getElementById("healthFaiss").textContent = data.faiss_index_size?.toLocaleString() || "—";
-    document.getElementById("healthCache").textContent =
-      data.cache_hit_rate ? `${(data.cache_hit_rate * 100).toFixed(1)}%` : "—";
-    document.getElementById("healthUptime").textContent =
-      data.uptime_seconds ? formatUptime(data.uptime_seconds) : "—";
-    document.getElementById("healthEndpoint").textContent = API_BASE;
-  } catch (err) {
-    document.getElementById("healthStatus").textContent = "OFFLINE";
-    document.getElementById("healthStatus").style.color = "var(--error)";
-    document.getElementById("healthEndpoint").textContent = API_BASE;
+    grid.innerHTML = `<p style="color:var(--text-secondary); text-align:center; grid-column: 1/-1">Search failed. ${err.message}</p>`;
+  } finally {
+    loading.style.display = "none";
+    grid.style.display = "grid";
   }
 }
 
-// ===== HELPER: Build Results HTML =====
-function buildResultsHTML(items, latency, modelVersion, cacheStatus) {
-  let metaHTML = `<span>Latency: <span>${latency}</span></span>`;
-  if (modelVersion) metaHTML += ` · <span>Model: <span>${modelVersion}</span></span>`;
-  if (cacheStatus) metaHTML += ` · <span>Cache: <span>${cacheStatus}</span></span>`;
+// Search on Enter key
+document.getElementById("searchInput").addEventListener("keypress", (e) => {
+  if (e.key === "Enter") fetchSearch();
+});
 
-  const headerHTML = `
-    <div class="result-header">
-      <div class="result-meta">${items.length} results returned</div>
-      <div class="result-meta">${metaHTML}</div>
-    </div>
-  `;
+// ===== RENDER PRODUCT GRID =====
+function renderProductGrid(items) {
+  const grid = document.getElementById("productGrid");
+  
+  if (!items || items.length === 0) {
+    grid.innerHTML = `<p style="color:var(--text-secondary); text-align:center; grid-column: 1/-1">No products found.</p>`;
+    return;
+  }
 
-  const listHTML = items
-    .map((item, i) => {
-      const score = item.score ?? 0;
-      const pct = Math.max(5, Math.round(score * 100));
-      const name = getProductName(item.item_id);
-      // Simulated price between $20‑$120
-      const price = (20 + Math.random() * 100).toFixed(2);
-      const amazonLink = `https://www.amazon.com/s?k=${encodeURIComponent(name)}`;
-      const ebayLink = `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(name)}`;
-      return `
-        <li class="result-item" style="animation: fadeInUp 0.3s ease-out ${i * 0.05}s both;">
-          <div class="result-rank">${i + 1}</div>
-          <div class="result-info">
-            <div class="result-name">${name}</div>
-            <div class="result-id">Item #${item.item_id}</div>
-            <div class="result-price">💲 $${price}</div>
-            <div class="result-links">
-              <a href="${amazonLink}" target="_blank" rel="noopener">Amazon</a> |
-              <a href="${ebayLink}" target="_blank" rel="noopener">eBay</a>
-            </div>
+  const listHTML = items.map((item, i) => {
+    const details = getProductDetails(item.item_id);
+    const score = item.score ?? 0;
+    
+    const amazonLink = `https://www.amazon.com/s?k=${encodeURIComponent(details.name)}`;
+    const ebayLink = `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(details.name)}`;
+    
+    // Fallback image generator (picsum) in case Unsplash fails or acts weird
+    const fallbackImg = `https://picsum.photos/seed/${item.item_id}/400/300`;
+
+    return `
+      <div class="product-card" style="animation: fadeInUp 0.4s ease-out ${i * 0.05}s both;">
+        <div class="product-image-wrap">
+          <div class="product-score">Match: ${(score * 100).toFixed(0)}%</div>
+          <img class="product-image" src="${details.imageUrl}" onerror="this.onerror=null;this.src='${fallbackImg}';" alt="${details.name}" loading="lazy" />
+        </div>
+        <div class="product-info">
+          <div class="product-brand">${details.brand}</div>
+          <div class="product-name">${details.name}</div>
+          <div class="product-price">$${details.price}</div>
+          <div class="product-actions">
+            <a href="${amazonLink}" target="_blank" rel="noopener" class="btn-buy btn-amazon">Amazon</a>
+            <a href="${ebayLink}" target="_blank" rel="noopener" class="btn-buy btn-ebay">eBay</a>
           </div>
-          <div class="result-score-bar">
-            <div class="result-score-value">${score.toFixed(4)}</div>
-            <div class="score-track">
-              <div class="score-fill" style="width: ${pct}%;"></div>
-            </div>
-          </div>
-        </li>
-      `;
-    })
-    .join("");
+        </div>
+      </div>
+    `;
+  }).join("");
 
-  return `${headerHTML}<ul class="result-list">${listHTML}</ul>`;
-}
-
-// ===== HELPER: Build Error HTML =====
-function buildErrorHTML(message) {
-  return `
-    <div class="result-error">
-      <span style="font-size: 32px;">⚠️</span>
-      <strong>Could not reach the API</strong>
-      <p>${message}. The Render free tier may be waking up — try again in 30 seconds.</p>
-    </div>
-  `;
-}
-
-// ===== HELPER: Format Uptime =====
-function formatUptime(seconds) {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
+  grid.innerHTML = listHTML;
 }
 
 // ===== INIT =====
 document.addEventListener("DOMContentLoaded", () => {
-  checkApiStatus();
-  fetchHealth();
-
-  // Update Swagger link
-  const swaggerLink = document.getElementById("swaggerLink");
-  if (swaggerLink) swaggerLink.href = `${API_BASE}/docs`;
-
-  // Smooth scroll for anchor links
-  document.querySelectorAll('a[href^="#"]').forEach((a) => {
-    a.addEventListener("click", (e) => {
-      const target = document.querySelector(a.getAttribute("href"));
-      if (target) {
-        e.preventDefault();
-        target.scrollIntoView({ behavior: "smooth", block: "start" });
-      }
-    });
-  });
+  // Automatically fetch recommendations when the page loads
+  fetchRecommendations();
 });
