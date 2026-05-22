@@ -1,5 +1,7 @@
 // ===== CONFIGURATION =====
 const API_BASE = "https://ecommerce-rec-engine.onrender.com";
+// Dummy user_id for backward compat with old Render build (ignored by new backend)
+const DUMMY_USER_ID = Math.floor(Math.random() * 5000) + 1;
 
 // ===== NAVBAR SCROLL EFFECT =====
 const navbar = document.getElementById("navbar");
@@ -122,7 +124,7 @@ async function fetchRecommendations() {
     const res = await fetch(`${API_BASE}/recommend`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ limit: 12, category: "trending electronics India 2024" }),
+      body: JSON.stringify({ limit: 12, category: "trending electronics India 2024", user_id: DUMMY_USER_ID }),
     });
 
     if (!res.ok) {
@@ -166,7 +168,7 @@ async function fetchSearch() {
     const res = await fetch(`${API_BASE}/search`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: query, limit: 12 }),
+      body: JSON.stringify({ query: query, limit: 12, user_id: DUMMY_USER_ID }),
     });
 
     if (!res.ok) {
