@@ -3,11 +3,21 @@ import time
 import json
 import pickle
 import hashlib
-import faiss
-import numpy as np
 import asyncio
 from datetime import datetime
 from fastapi import FastAPI, Request, HTTPException
+
+# faiss-cpu may crash at C level (SIGILL) on CPUs without AVX2 support.
+# Import it safely so the rest of the app can still start.
+try:
+    import faiss
+    import numpy as np
+    FAISS_AVAILABLE = True
+except Exception as _faiss_err:
+    faiss = None
+    import numpy as np
+    FAISS_AVAILABLE = False
+    print(f"Warning: faiss could not be imported ({_faiss_err}). Running without vector search.")
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -103,7 +113,8 @@ async def lifespan(app: FastAPI):
             db_pool = await asyncpg.create_pool(
                 DATABASE_URL,
                 min_size=1,
-                max_size=5
+                max_size=5,
+                timeout=10          # don't hang startup waiting for TCP
             )
             print("Supabase connection pool initialized successfully (bounds: 1-5 connections).")
         except Exception as e:
@@ -118,23 +129,30 @@ async def lifespan(app: FastAPI):
         models["version"] = "v1.0"
         
         # Load FAISS Indexes
-        try:
-            rec_idx_path = hf_hub_download(HF_REPO_ID, "rec_index.faiss", local_dir="/tmp")
-            models["rec_index"] = faiss.read_index(rec_idx_path)
-            print("Loaded rec_index.faiss successfully.")
-        except Exception as e:
-            print(f"Warning: Could not load rec_index.faiss ({e}). Compiling dummy FAISS index.")
-            rec_index = faiss.IndexFlatIP(64)
-            rec_index.add(np.random.randn(2005, 64).astype('float32'))
-            models["rec_index"] = rec_index
+        if FAISS_AVAILABLE:
+            try:
+                rec_idx_path = hf_hub_download(HF_REPO_ID, "rec_index.faiss", local_dir="/tmp")
+                models["rec_index"] = faiss.read_index(rec_idx_path)
+                print("Loaded rec_index.faiss successfully.")
+            except Exception as e:
+                print(f"Warning: Could not load rec_index.faiss ({e}). Compiling dummy FAISS index.")
+                rec_index = faiss.IndexFlatIP(64)
+                rec_index.add(np.random.randn(2005, 64).astype('float32'))
+                models["rec_index"] = rec_index
+        else:
+            print("Warning: Skipping FAISS index load — faiss unavailable.")
+            models["rec_index"] = None
             
-        try:
-            rag_idx_path = hf_hub_download(HF_REPO_ID, "rag_index.faiss", local_dir="/tmp")
-            models["rag_index"] = faiss.read_index(rag_idx_path)
-            print("Loaded rag_index.faiss successfully.")
-        except Exception as e:
-            print(f"Warning: Could not load rag_index.faiss ({e}). Reusing rec_index.")
-            models["rag_index"] = models.get("rec_index")
+        if FAISS_AVAILABLE:
+            try:
+                rag_idx_path = hf_hub_download(HF_REPO_ID, "rag_index.faiss", local_dir="/tmp")
+                models["rag_index"] = faiss.read_index(rag_idx_path)
+                print("Loaded rag_index.faiss successfully.")
+            except Exception as e:
+                print(f"Warning: Could not load rag_index.faiss ({e}). Reusing rec_index.")
+                models["rag_index"] = models.get("rec_index")
+        else:
+            models["rag_index"] = None
         
         # Load ALS collaborative filtering model
         try:
@@ -235,7 +253,7 @@ async def ping():
 @app.get("/health")
 async def health():
     uptime = time.time() - models.get("start_time", time.time())
-    faiss_size = models["rec_index"].ntotal if "rec_index" in models else 0
+    faiss_size = models["rec_index"].ntotal if FAISS_AVAILABLE and models.get("rec_index") else 0
     return {
         "status": "ok",
         "model_version": models.get("version", "unknown"),
@@ -271,21 +289,20 @@ async def recommend(request: Request, req: RecommendRequest):
     try:
         user_id_mapped = models.get("user_map", {}).get(req.user_id, req.user_id)
         # Check if we have ALS model and embeddings loaded
-        if models.get("als") and models.get("user_factors") is not None:
-            user_vector = models["user_factors"][user_id_mapped].reshape(1, -1).astype('float32')
-            # Vector query in FAISS for top recommendations
-            distances, indices = models["rec_index"].search(user_vector, req.limit)
-            
-            for rank, (idx, dist) in enumerate(zip(indices[0], distances[0])):
-                # Map back to original product space
-                raw_item_id = models.get("item_map_rev", {}).get(idx, int(idx))
-                recs.append({
-                    "item_id": raw_item_id,
-                    "score": float(dist)
-                })
-        else:
-            # Fallback to smart popular products if models are bootstrapping
+        # Check if FAISS index is available
+        if not FAISS_AVAILABLE or models.get("rec_index") is None:
+            # Fallback to simple popular items
             recs = [{"item_id": i, "score": round(0.99 - (i/1000), 4)} for i in range(1, req.limit + 1)]
+        else:
+            # Proceed with collaborative filtering
+            if models.get("als") and models.get("user_factors") is not None:
+                user_vector = models["user_factors"][user_id_mapped].reshape(1, -1).astype('float32')
+                distances, indices = models["rec_index"].search(user_vector, req.limit)
+                for rank, (idx, dist) in enumerate(zip(indices[0], distances[0])):
+                    raw_item_id = models.get("item_map_rev", {}).get(idx, int(idx))
+                    recs.append({"item_id": raw_item_id, "score": float(dist)})
+            else:
+                recs = [{"item_id": i, "score": round(0.99 - (i/1000), 4)} for i in range(1, req.limit + 1)]
     except Exception as e:
         print(f"Warning: Recommendation generation fallback triggered: {e}")
         recs = [{"item_id": i, "score": round(0.95 - (i/1000), 4)} for i in range(1, req.limit + 1)]
@@ -339,23 +356,22 @@ async def similar(request: Request, req: SimilarRequest):
     similar_items = []
     try:
         item_id_mapped = models.get("item_map", {}).get(req.item_id, req.item_id)
-        if models.get("item_factors") is not None:
-            item_vector = models["item_factors"][item_id_mapped].reshape(1, -1).astype('float32')
-            # Query FAISS for similar items (limit + 1 to exclude self)
-            distances, indices = models["rec_index"].search(item_vector, req.limit + 1)
-            
-            for rank, (idx, dist) in enumerate(zip(indices[0], distances[0])):
-                raw_item_id = models.get("item_map_rev", {}).get(idx, int(idx))
-                if raw_item_id == req.item_id:
-                    continue
-                similar_items.append({
-                    "item_id": raw_item_id,
-                    "score": float(dist)
-                })
-                if len(similar_items) >= req.limit:
-                    break
-        else:
+        if not FAISS_AVAILABLE or models.get("rec_index") is None:
             similar_items = [{"item_id": i + req.item_id, "score": round(0.95 - (i/100), 4)} for i in range(1, req.limit + 1)]
+        else:
+            # Normal similar logic with FAISS
+            if models.get("item_factors") is not None:
+                item_vector = models["item_factors"][item_id_mapped].reshape(1, -1).astype('float32')
+                distances, indices = models["rec_index"].search(item_vector, req.limit + 1)
+                for rank, (idx, dist) in enumerate(zip(indices[0], distances[0])):
+                    raw_item_id = models.get("item_map_rev", {}).get(idx, int(idx))
+                    if raw_item_id == req.item_id:
+                        continue
+                    similar_items.append({"item_id": raw_item_id, "score": float(dist)})
+                    if len(similar_items) >= req.limit:
+                        break
+            else:
+                similar_items = [{"item_id": i + req.item_id, "score": round(0.95 - (i/100), 4)} for i in range(1, req.limit + 1)]
     except Exception as e:
         print(f"Warning: Similar search fallback triggered: {e}")
         similar_items = [{"item_id": i + req.item_id, "score": round(0.90 - (i/100), 4)} for i in range(1, req.limit + 1)]
@@ -393,14 +409,17 @@ async def search(request: Request, req: SearchRequest):
     search_results = []
     try:
         user_id_mapped = models.get("user_map", {}).get(req.user_id, req.user_id)
-        if models.get("user_factors") is not None:
-            user_vector = models["user_factors"][user_id_mapped].reshape(1, -1).astype('float32')
-            distances, indices = models["rec_index"].search(user_vector, req.limit)
-            for idx, dist in zip(indices[0], distances[0]):
-                raw_item_id = models.get("item_map_rev", {}).get(idx, int(idx))
-                search_results.append({"item_id": raw_item_id, "score": float(dist)})
+        if not FAISS_AVAILABLE or models.get("rec_index") is None:
+            search_results = [{"item_id": i, "score": round(0.98 - (i/1000), 4)} for i in range(1, req.limit + 1)]
         else:
-            search_results = [{"item_id": i, "score": round(0.98 - (i / 1000), 4)} for i in range(1, req.limit + 1)]
+            if models.get("user_factors") is not None:
+                user_vector = models["user_factors"][user_id_mapped].reshape(1, -1).astype('float32')
+                distances, indices = models["rec_index"].search(user_vector, req.limit)
+                for idx, dist in zip(indices[0], distances[0]):
+                    raw_item_id = models.get("item_map_rev", {}).get(idx, int(idx))
+                    search_results.append({"item_id": raw_item_id, "score": float(dist)})
+            else:
+                search_results = [{"item_id": i, "score": round(0.98 - (i/1000), 4)} for i in range(1, req.limit + 1)]
     except Exception as e:
         print(f"Warning: Search personalization failed: {e}")
         search_results = [{"item_id": i, "score": round(0.88 - (i / 1000), 4)} for i in range(1, req.limit + 1)]
