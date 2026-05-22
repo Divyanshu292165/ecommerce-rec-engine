@@ -438,7 +438,7 @@ async def search(request: Request, req: SearchRequest):
 
 @app.post("/interaction")
 @limiter.limit("200/minute")
-async def log_interaction(req: LogInteractionRequest):
+async def log_interaction(request: Request, req: LogInteractionRequest):
     # Public endpoint to log custom user clicks/purchases asynchronously
     try:
         await interaction_queue.put({
