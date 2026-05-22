@@ -25,12 +25,13 @@ function getDealBadgeHTML(deal) {
 // ===== RENDER PRODUCT GRID =====
 function renderProductGrid(products) {
   const grid = document.getElementById("productGrid");
+  grid.innerHTML = "";
 
   if (!products || products.length === 0) {
     grid.innerHTML = `
-      <div class="empty-state" style="grid-column:1/-1">
-        <div class="empty-icon">🔍</div>
-        <p>No products found. Try a different search term.</p>
+      <div style="grid-column:1/-1; text-align:center; padding:40px; color:#94a3b8;">
+        <h3 style="color:#f1f5f9; margin-bottom:8px;">No products found</h3>
+        <p>Try searching for a different term.</p>
       </div>`;
     return;
   }
@@ -124,7 +125,7 @@ async function fetchRecommendations() {
     const res = await fetch(`${API_BASE}/recommend`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ limit: 12, category: "trending electronics India 2024", user_id: DUMMY_USER_ID }),
+      body: JSON.stringify({ limit: 12, category: "trending electronics", user_id: DUMMY_USER_ID }),
     });
 
     if (!res.ok) {

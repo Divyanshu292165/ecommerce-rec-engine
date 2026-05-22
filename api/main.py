@@ -272,12 +272,6 @@ async def search(request: Request, req: SearchRequest):
 
     products = await fetch_amazon_search(req.query, req.limit)
 
-    if not products:
-        raise HTTPException(
-            status_code=503,
-            detail="Could not fetch products. Please check RAPIDAPI_KEY is set in environment variables.",
-        )
-
     # Cache for 10 minutes
     if redis:
         try:
@@ -312,12 +306,6 @@ async def recommend(request: Request, req: RecommendRequest):
             print(f"Redis GET error: {e}")
 
     products = await fetch_amazon_search(req.category, req.limit)
-
-    if not products:
-        raise HTTPException(
-            status_code=503,
-            detail="Could not fetch recommendations. Please check RAPIDAPI_KEY is set in environment variables.",
-        )
 
     # Cache trending for 30 minutes
     if redis:
