@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="AI-Powered E-commerce Recommendation Engine — Get personalized product recommendations using collaborative filtering and deep learning.">
+  <title>NeuralShop — AI Recommendation Engine</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Animated Background -->
+  <div class="bg-grid"></div>
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+  <div class="bg-glow bg-glow-3"></div>
+
+  <!-- Navigation -->
+  <nav class="navbar" id="navbar">
+    <div class="nav-container">
+      <a href="#" class="nav-logo">
+        <span class="logo-icon">⚡</span>
+        <span class="logo-text">Neural<span class="logo-accent">Shop</span></span>
+      </a>
+      <div class="nav-links">
+        <a href="#hero" class="nav-link active">Home</a>
+        <a href="#recommendations" class="nav-link">Recommendations</a>
+        <a href="#similar" class="nav-link">Similar Items</a>
+        <a href="#search" class="nav-link">Search</a>
+        <a href="#health" class="nav-link">System Health</a>
+      </div>
+      <div class="nav-actions">
+        <div class="status-indicator" id="apiStatus">
+          <span class="status-dot"></span>
+          <span class="status-text">Checking API...</span>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero Section -->
+  <section class="hero" id="hero">
+    <div class="hero-content">
+      <div class="hero-badge">
+        <span class="badge-dot"></span>
+        AI-Powered Recommendations
+      </div>
+      <h1 class="hero-title">
+        Discover Products<br>
+        <span class="gradient-text">You'll Actually Love</span>
+      </h1>
+      <p class="hero-subtitle">
+        Powered by ALS Collaborative Filtering & Two-Tower Neural Networks trained on 100K+ interaction events. Real-time FAISS vector search delivers personalized recommendations in under 50ms.
+      </p>
+      <div class="hero-stats">
+        <div class="stat-item">
+          <span class="stat-number" id="statUsers">5,000</span>
+          <span class="stat-label">Users</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-number" id="statProducts">2,000</span>
+          <span class="stat-label">Products</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-number" id="statEvents">100K+</span>
+          <span class="stat-label">Events</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-number">&lt;50ms</span>
+          <span class="stat-label">Latency</span>
+        </div>
+      </div>
+      <div class="hero-cta">
+        <a href="#recommendations" class="btn btn-primary">
+          <span>Try It Live</span>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </a>
+        <a href="https://github.com/Divyanshu292165/ecommerce-rec-engine" target="_blank" class="btn btn-secondary">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+          <span>View Source</span>
+        </a>
+      </div>
+    </div>
+    <div class="hero-visual">
+      <div class="floating-card card-1">
+        <div class="card-icon">🎧</div>
+        <div class="card-text">Wireless Headphones</div>
+        <div class="card-score">Score: 0.95</div>
+      </div>
+      <div class="floating-card card-2">
+        <div class="card-icon">📱</div>
+        <div class="card-text">Smartphone Pro</div>
+        <div class="card-score">Score: 0.88</div>
+      </div>
+      <div class="floating-card card-3">
+        <div class="card-icon">💻</div>
+        <div class="card-text">Ultra Laptop</div>
+        <div class="card-score">Score: 0.82</div>
+      </div>
+      <div class="floating-card card-4">
+        <div class="card-icon">⌚</div>
+        <div class="card-text">Smart Watch</div>
+        <div class="card-score">Score: 0.79</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Recommendations Section -->
+  <section class="section" id="recommendations">
+    <div class="section-container">
+      <div class="section-header">
+        <span class="section-tag">POST /recommend</span>
+        <h2 class="section-title">Personalized Recommendations</h2>
+        <p class="section-desc">Enter a User ID to get AI-powered product recommendations using our ensemble model (ALS + Two-Tower Neural Network).</p>
+      </div>
+      <div class="api-card">
+        <div class="input-row">
+          <div class="input-group">
+            <label for="recUserId">User ID</label>
+            <input type="number" id="recUserId" value="123" min="1" max="5000" placeholder="1 – 5000">
+          </div>
+          <div class="input-group">
+            <label for="recLimit">Limit</label>
+            <input type="number" id="recLimit" value="10" min="1" max="100" placeholder="1 – 100">
+          </div>
+          <button class="btn btn-primary btn-fetch" id="btnRecommend" onclick="fetchRecommendations()">
+            <span class="btn-text">Get Recommendations</span>
+            <span class="btn-loader"></span>
+          </button>
+        </div>
+        <div class="results-area" id="recResults">
+          <div class="results-placeholder">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+            <p>Click "Get Recommendations" to see results</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Similar Items Section -->
+  <section class="section section-alt" id="similar">
+    <div class="section-container">
+      <div class="section-header">
+        <span class="section-tag">POST /similar</span>
+        <h2 class="section-title">Find Similar Items</h2>
+        <p class="section-desc">Discover products similar to any item using FAISS vector similarity search on Two-Tower embeddings.</p>
+      </div>
+      <div class="api-card">
+        <div class="input-row">
+          <div class="input-group">
+            <label for="simItemId">Item ID</label>
+            <input type="number" id="simItemId" value="456" min="1" max="2000" placeholder="1 – 2000">
+          </div>
+          <div class="input-group">
+            <label for="simLimit">Limit</label>
+            <input type="number" id="simLimit" value="10" min="1" max="100" placeholder="1 – 100">
+          </div>
+          <button class="btn btn-primary btn-fetch" id="btnSimilar" onclick="fetchSimilar()">
+            <span class="btn-text">Find Similar</span>
+            <span class="btn-loader"></span>
+          </button>
+        </div>
+        <div class="results-area" id="simResults">
+          <div class="results-placeholder">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+            <p>Click "Find Similar" to see results</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Search Section -->
+  <section class="section" id="search">
+    <div class="section-container">
+      <div class="section-header">
+        <span class="section-tag">POST /search</span>
+        <h2 class="section-title">Personalized Search</h2>
+        <p class="section-desc">Search for products by keyword, re-ranked by personal affinity using your user embedding.</p>
+      </div>
+      <div class="api-card">
+        <div class="input-row">
+          <div class="input-group input-group-wide">
+            <label for="searchQuery">Search Query</label>
+            <input type="text" id="searchQuery" value="wireless headphones" placeholder="e.g. wireless headphones">
+          </div>
+          <div class="input-group">
+            <label for="searchUserId">User ID</label>
+            <input type="number" id="searchUserId" value="123" min="1" max="5000" placeholder="1 – 5000">
+          </div>
+          <button class="btn btn-primary btn-fetch" id="btnSearch" onclick="fetchSearch()">
+            <span class="btn-text">Search</span>
+            <span class="btn-loader"></span>
+          </button>
+        </div>
+        <div class="results-area" id="searchResults">
+          <div class="results-placeholder">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+            <p>Click "Search" to see results</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Health Section -->
+  <section class="section section-alt" id="health">
+    <div class="section-container">
+      <div class="section-header">
+        <span class="section-tag">GET /health</span>
+        <h2 class="section-title">System Health</h2>
+        <p class="section-desc">Real-time monitoring of the recommendation engine's status, model version, and performance metrics.</p>
+      </div>
+      <div class="health-grid" id="healthGrid">
+        <div class="health-card">
+          <div class="health-icon">🟢</div>
+          <div class="health-label">Status</div>
+          <div class="health-value" id="healthStatus">—</div>
+        </div>
+        <div class="health-card">
+          <div class="health-icon">🧠</div>
+          <div class="health-label">Model Version</div>
+          <div class="health-value" id="healthModel">—</div>
+        </div>
+        <div class="health-card">
+          <div class="health-icon">📊</div>
+          <div class="health-label">FAISS Index Size</div>
+          <div class="health-value" id="healthFaiss">—</div>
+        </div>
+        <div class="health-card">
+          <div class="health-icon">💾</div>
+          <div class="health-label">Cache Hit Rate</div>
+          <div class="health-value" id="healthCache">—</div>
+        </div>
+        <div class="health-card">
+          <div class="health-icon">⏱️</div>
+          <div class="health-label">Uptime</div>
+          <div class="health-value" id="healthUptime">—</div>
+        </div>
+        <div class="health-card">
+          <div class="health-icon">🌐</div>
+          <div class="health-label">API Endpoint</div>
+          <div class="health-value health-value-small" id="healthEndpoint">—</div>
+        </div>
+      </div>
+      <div class="health-actions">
+        <button class="btn btn-primary" onclick="fetchHealth()">Refresh Health Check</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tech Stack Section -->
+  <section class="section" id="techstack">
+    <div class="section-container">
+      <div class="section-header">
+        <span class="section-tag">100% Free Stack</span>
+        <h2 class="section-title">Architecture & Tech Stack</h2>
+        <p class="section-desc">Built with production-grade tools used by ML startups — all on free tiers.</p>
+      </div>
+      <div class="tech-grid">
+        <div class="tech-card">
+          <div class="tech-emoji">🧪</div>
+          <h3>Google Colab</h3>
+          <p>Model training with free T4 GPU</p>
+        </div>
+        <div class="tech-card">
+          <div class="tech-emoji">🤗</div>
+          <h3>Hugging Face</h3>
+          <p>Model artifact hosting</p>
+        </div>
+        <div class="tech-card">
+          <div class="tech-emoji">🐘</div>
+          <h3>Supabase</h3>
+          <p>PostgreSQL database</p>
+        </div>
+        <div class="tech-card">
+          <div class="tech-emoji">⚡</div>
+          <h3>Upstash Redis</h3>
+          <p>Serverless caching layer</p>
+        </div>
+        <div class="tech-card">
+          <div class="tech-emoji">🚀</div>
+          <h3>Render</h3>
+          <p>FastAPI hosting</p>
+        </div>
+        <div class="tech-card">
+          <div class="tech-emoji">🔄</div>
+          <h3>GitHub Actions</h3>
+          <p>CI/CD pipeline</p>
+        </div>
+        <div class="tech-card">
+          <div class="tech-emoji">📈</div>
+          <h3>Grafana Cloud</h3>
+          <p>Monitoring & alerts</p>
+        </div>
+        <div class="tech-card">
+          <div class="tech-emoji">🌐</div>
+          <h3>Vercel</h3>
+          <p>Frontend hosting</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="footer-container">
+      <div class="footer-brand">
+        <span class="logo-icon">⚡</span>
+        <span class="logo-text">Neural<span class="logo-accent">Shop</span></span>
+      </div>
+      <p class="footer-text">Built by Divyanshu · AI E-commerce Recommendation Engine</p>
+      <div class="footer-links">
+        <a href="https://github.com/Divyanshu292165/ecommerce-rec-engine" target="_blank">GitHub</a>
+        <a href="#" id="swaggerLink" target="_blank">Swagger UI</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
