@@ -140,6 +140,7 @@ def map_product(p: dict) -> dict:
     deal = analyze_deal(p)
 
     return {
+        "asin": p.get("asin") or "",
         "title": p.get("product_title", "Unknown Product"),
         "brand": p.get("product_brand") or "",
         "price": price_inr,
@@ -226,6 +227,16 @@ except Exception:
 class SearchRequest(BaseModel):
     query: str
     limit: int = Field(default=12, ge=1, le=50)
+
+class TrackProductRequest(BaseModel):
+    asin: str
+    title: str
+    price: str | None = None
+    original_price: str | None = None
+    image: str | None = None
+    url: str | None = None
+    rating: str | None = None
+    num_ratings: int | None = None
 
 
 class RecommendRequest(BaseModel):
@@ -319,3 +330,106 @@ async def recommend(request: Request, req: RecommendRequest):
         "response_time_ms": int((time.time() - start_ts) * 1000),
         "source": "amazon",
     }
+
+
+@app.post("/favorites/{user_id}")
+async def add_favorite(user_id: str, product: TrackProductRequest):
+    """Save a product to the user's favorites list in Redis."""
+    if not redis:
+        raise HTTPException(status_code=500, detail="Redis is not configured")
+    
+    key = f"favorites:{user_id}"
+    try:
+        await redis.hset(key, product.asin, product.model_dump_json())
+        return {"status": "ok", "message": "Product saved"}
+    except Exception as e:
+        print(f"Redis error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save product")
+
+
+@app.get("/favorites/{user_id}")
+async def get_favorites(user_id: str):
+    """Get all saved products for a user."""
+    if not redis:
+        return {"results": []}
+    
+    key = f"favorites:{user_id}"
+    try:
+        favorites = await redis.hgetall(key)
+        results = []
+        for asin, prod_json in favorites.items():
+            results.append(json.loads(prod_json))
+        return {"results": results}
+    except Exception as e:
+        print(f"Redis error: {e}")
+        return {"results": []}
+
+
+@app.delete("/favorites/{user_id}/{asin}")
+async def delete_favorite(user_id: str, asin: str):
+    """Remove a saved product."""
+    if not redis:
+        raise HTTPException(status_code=500, detail="Redis is not configured")
+    
+    key = f"favorites:{user_id}"
+    try:
+        await redis.hdel(key, asin)
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to delete product")
+
+
+@app.post("/favorites/{user_id}/refresh")
+async def refresh_favorites(user_id: str):
+    """Fetch live prices for tracked items and check for drops."""
+    if not redis:
+        raise HTTPException(status_code=500, detail="Redis not configured")
+    
+    key = f"favorites:{user_id}"
+    favorites = await redis.hgetall(key)
+    if not favorites:
+        return {"results": [], "alerts": []}
+    
+    headers = {
+        "X-RapidAPI-Key": RAPIDAPI_KEY,
+        "X-RapidAPI-Host": RAPIDAPI_HOST,
+    }
+    
+    updated_results = []
+    alerts = []
+    
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        for asin, prod_json in favorites.items():
+            prod = json.loads(prod_json)
+            params = {"asin": asin, "country": "IN"}
+            try:
+                resp = await client.get(f"{RAPIDAPI_BASE}/product-details", headers=headers, params=params)
+                if resp.status_code == 200:
+                    data = resp.json().get("data", {})
+                    new_price_str = data.get("product_price")
+                    if new_price_str:
+                        new_inr = parse_price_to_inr(new_price_str)
+                        old_inr = prod.get("price")
+                        
+                        old_val = int("".join(filter(str.isdigit, str(old_inr)))) if old_inr else 0
+                        new_val = int("".join(filter(str.isdigit, str(new_inr)))) if new_inr else 0
+                        
+                        if new_val > 0 and old_val > 0 and new_val < old_val:
+                            alerts.append({
+                                "asin": asin,
+                                "title": prod.get("title"),
+                                "old_price": old_inr,
+                                "new_price": new_inr,
+                                "drop": old_val - new_val
+                            })
+                            
+                        prod["price"] = new_inr
+                        await redis.hset(key, asin, json.dumps(prod))
+                        
+            except Exception as e:
+                print(f"Error refreshing {asin}: {e}")
+                
+            updated_results.append(prod)
+            await asyncio.sleep(0.5)
+            
+    return {"results": updated_results, "alerts": alerts}
