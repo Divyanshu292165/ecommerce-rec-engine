@@ -1,5 +1,7 @@
 // ===== CONFIGURATION =====
-const API_BASE = "https://ecommerce-rec-engine.onrender.com";
+const API_BASE = window.location.origin.startsWith("http")
+  ? window.location.origin
+  : "http://localhost:8000";
 const DUMMY_USER_ID = Math.floor(Math.random() * 5000) + 1;
 
 // ===== USER PROFILE =====
@@ -304,9 +306,9 @@ async function getErrorMessage(res) {
     const data = await res.json();
     if (data && typeof data.detail === 'string') return data.detail;
     if (data && data.detail) return JSON.stringify(data.detail);
-    return \`HTTP \${res.status}\`;
+    return `HTTP ${res.status}`;
   } catch {
-    return \`HTTP \${res.status}\`;
+    return `HTTP ${res.status}`;
   }
 }
 
@@ -364,7 +366,7 @@ async function fetchSearch() {
   grid.style.display = "none";
   loading.style.display = "flex";
 
-  title.textContent = \`Results for "\${query}"\`;
+  title.textContent = `Results for "${query}"`;
   desc.textContent = "Live search results from Amazon with deal analysis.";
 
   try {
@@ -410,4 +412,3 @@ document.addEventListener("DOMContentLoaded", () => {
   // Load favorites in background (doesn't block the main spinner)
   loadFavorites().catch(err => console.warn("Favorites load failed:", err));
 });
-

@@ -5,6 +5,7 @@ import json
 import hashlib
 import asyncio
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -51,6 +52,69 @@ TRENDING_QUERIES = [
     "gaming accessories",
     "smart home devices",
 ]
+
+DEMO_PRODUCTS = [
+    {
+        "asin": "DEMO-LAPTOP-1",
+        "product_title": "Lenovo IdeaPad Slim 3 Intel Core i5 Laptop",
+        "product_brand": "Lenovo",
+        "product_price": "\u20b952,990",
+        "product_original_price": "\u20b970,990",
+        "product_photo": "https://m.media-amazon.com/images/I/61Dw5Z8LzJL._AC_UY327_FMwebp_QL65_.jpg",
+        "product_url": "https://www.amazon.in/s?k=lenovo+ideapad+slim+3+i5",
+        "product_star_rating": "4.2",
+        "product_num_ratings": 1824,
+        "is_prime": True,
+        "product_badge": None,
+    },
+    {
+        "asin": "DEMO-PHONE-1",
+        "product_title": "Samsung Galaxy M Series 5G Smartphone",
+        "product_brand": "Samsung",
+        "product_price": "\u20b916,499",
+        "product_original_price": "\u20b922,999",
+        "product_photo": "https://m.media-amazon.com/images/I/81ZSn2rk9WL._AC_UY327_FMwebp_QL65_.jpg",
+        "product_url": "https://www.amazon.in/s?k=samsung+galaxy+m+series+5g",
+        "product_star_rating": "4.1",
+        "product_num_ratings": 12643,
+        "is_prime": True,
+        "product_badge": None,
+    },
+    {
+        "asin": "DEMO-EARBUDS-1",
+        "product_title": "boAt Airdopes Wireless Earbuds with Fast Charging",
+        "product_brand": "boAt",
+        "product_price": "\u20b91,299",
+        "product_original_price": "\u20b94,990",
+        "product_photo": "https://m.media-amazon.com/images/I/61KNJav3S9L._AC_UY327_FMwebp_QL65_.jpg",
+        "product_url": "https://www.amazon.in/s?k=boat+airdopes+wireless+earbuds",
+        "product_star_rating": "4.0",
+        "product_num_ratings": 85421,
+        "is_prime": True,
+        "product_badge": None,
+    },
+    {
+        "asin": "DEMO-MOUSE-1",
+        "product_title": "Logitech Wireless Mouse for Work and Gaming",
+        "product_brand": "Logitech",
+        "product_price": "\u20b9799",
+        "product_original_price": "\u20b91,299",
+        "product_photo": "https://m.media-amazon.com/images/I/61LtuGzXeaL._AC_UY327_FMwebp_QL65_.jpg",
+        "product_url": "https://www.amazon.in/s?k=logitech+wireless+mouse",
+        "product_star_rating": "4.4",
+        "product_num_ratings": 31908,
+        "is_prime": True,
+        "product_badge": None,
+    },
+]
+
+
+def get_demo_products(limit: int = 12) -> list:
+    """Return demo products so the UI remains usable without RapidAPI credentials."""
+    products = []
+    while len(products) < limit:
+        products.extend(DEMO_PRODUCTS)
+    return [map_product(product) for product in products[:limit]]
 
 
 def parse_price_to_inr(price_str: str) -> str:
@@ -160,7 +224,7 @@ def map_product(p: dict) -> dict:
 async def fetch_amazon_search(query: str, limit: int = 12) -> list:
     """Fetch products from RapidAPI Amazon search endpoint."""
     if not RAPIDAPI_KEY:
-        return []
+        return get_demo_products(limit)
 
     headers = {
         "X-RapidAPI-Key": RAPIDAPI_KEY,
@@ -188,7 +252,7 @@ async def fetch_amazon_search(query: str, limit: int = 12) -> list:
             return [map_product(p) for p in products[:limit]]
     except Exception as e:
         print(f"RapidAPI search error for '{query}': {e}")
-        return []
+        return get_demo_products(limit)
 
 
 # ─── Lifespan ─────────────────────────────────────────────────────────────────
@@ -250,6 +314,11 @@ class RecommendRequest(BaseModel):
 @app.get("/ping")
 async def ping():
     return {"status": "ok"}
+
+
+@app.get("/", include_in_schema=False)
+async def root():
+    return RedirectResponse(url="/static/")
 
 
 @app.get("/health")
