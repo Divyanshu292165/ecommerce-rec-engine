@@ -51,6 +51,36 @@ function buildRequestProfile() {
   };
 }
 
+function getPrimaryCategory() {
+  return userProfile.preferred_categories[0] || "";
+}
+
+function buildRecommendationQuery() {
+  const category = getPrimaryCategory();
+  const budget = userProfile.budget_max;
+  const categoryQueries = {
+    smartphones: "best smartphones",
+    laptops: "best laptops",
+    audio: "wireless earbuds headphones speakers",
+    accessories: "computer accessories keyboard mouse charger",
+    "smart home": "smart home devices",
+  };
+  const baseQuery = categoryQueries[category] || "trending electronics";
+  return budget ? `${baseQuery} under ${budget}` : baseQuery;
+}
+
+function getRecommendationHeading() {
+  const category = getPrimaryCategory();
+  const labels = {
+    smartphones: "Recommended Phones",
+    laptops: "Recommended Laptops",
+    audio: "Recommended Audio",
+    accessories: "Recommended Accessories",
+    "smart home": "Recommended Smart Home",
+  };
+  return labels[category] || "Trending Electronics";
+}
+
 function learnFromProduct(product) {
   if (!product) return;
   if (product.category && !userProfile.preferred_categories.includes(product.category)) {
@@ -388,8 +418,11 @@ async function fetchRecommendations() {
   grid.style.display = "none";
   loading.style.display = "flex";
 
-  title.textContent = "Trending Electronics";
-  desc.textContent = "Live deals & top picks from Amazon — updated in real-time.";
+  const recommendationQuery = buildRecommendationQuery();
+  title.textContent = getRecommendationHeading();
+  desc.textContent = userProfile.preferred_categories.length
+    ? "Ranked from your selected interests, budget, and product signals."
+    : "Live deals & top picks from Amazon - updated in real-time.";
 
   try {
     const res = await fetch(`${API_BASE}/recommend`, {
@@ -397,7 +430,7 @@ async function fetchRecommendations() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         limit: 12,
-        category: "trending electronics",
+        category: recommendationQuery,
         user_profile: buildRequestProfile(),
       }),
     });

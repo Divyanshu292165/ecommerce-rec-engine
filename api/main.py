@@ -232,10 +232,51 @@ def infer_category(title: str) -> str:
     title_l = title.lower()
     category_terms = {
         "laptops": ["laptop", "notebook", "ideapad", "macbook"],
-        "smartphones": ["phone", "smartphone", "galaxy", "iphone", "redmi", "oneplus"],
-        "audio": ["earbuds", "headphone", "speaker", "airpod", "airdopes"],
-        "accessories": ["mouse", "keyboard", "charger", "cable", "gaming"],
-        "smart home": ["smart home", "alexa", "echo", "camera", "bulb"],
+        "smartphones": [
+            "phone",
+            "smartphone",
+            "mobile",
+            "galaxy",
+            "iphone",
+            "redmi",
+            "oneplus",
+            "realme",
+            "vivo",
+            "oppo",
+            "motorola",
+            "nothing",
+            "poco",
+        ],
+        "audio": [
+            "earbuds",
+            "headphone",
+            "headset",
+            "speaker",
+            "soundbar",
+            "airpod",
+            "airdopes",
+        ],
+        "accessories": [
+            "mouse",
+            "keyboard",
+            "charger",
+            "cable",
+            "gaming",
+            "controller",
+            "power bank",
+            "adapter",
+            "hub",
+        ],
+        "smart home": [
+            "smart home",
+            "alexa",
+            "echo",
+            "camera",
+            "bulb",
+            "projector",
+            "home theater",
+            "theater",
+        ],
     }
     for category, terms in category_terms.items():
         if any(term in title_l for term in terms):
@@ -316,8 +357,10 @@ def personalize_product(
 
     preferred_categories = _profile_values(profile, "preferred_categories")
     if category in preferred_categories:
-        score += 26
+        score += 90
         reasons.append(f"matches your {category} interest")
+    elif preferred_categories:
+        score -= 80
 
     query_terms = [term for term in query.lower().split() if len(term) > 2]
     query_matches = sum(1 for term in query_terms if term in title_l)
@@ -338,9 +381,24 @@ def rank_products(products: list, profile: dict | None = None, query: str = "") 
     personalized = [
         personalize_product(product, profile, query) for product in products
     ]
-    return sorted(
+    sorted_products = sorted(
         personalized, key=lambda item: item.get("recommendation_score", 0), reverse=True
     )
+    preferred_categories = _profile_values(profile, "preferred_categories")
+    if preferred_categories:
+        matching = [
+            product
+            for product in sorted_products
+            if product.get("category") in preferred_categories
+        ]
+        other = [
+            product
+            for product in sorted_products
+            if product.get("category") not in preferred_categories
+        ]
+        if matching:
+            return matching + other
+    return sorted_products
 
 
 async def fetch_amazon_search(
@@ -469,7 +527,7 @@ async def search(request: Request, req: SearchRequest):
     profile_hash = hashlib.sha256(
         json.dumps(req.user_profile or {}, sort_keys=True).encode()
     ).hexdigest()[:10]
-    cache_key = f"search_v3:{hashlib.sha256(req.query.encode()).hexdigest()[:16]}:{profile_hash}"
+    cache_key = f"search_v4:{hashlib.sha256(req.query.encode()).hexdigest()[:16]}:{profile_hash}"
 
     # Try Redis cache first
     if redis:
@@ -509,7 +567,7 @@ async def recommend(request: Request, req: RecommendRequest):
     profile_hash = hashlib.sha256(
         json.dumps(req.user_profile or {}, sort_keys=True).encode()
     ).hexdigest()[:10]
-    cache_key = f"recommend_v3:{req.category[:30]}:{profile_hash}"
+    cache_key = f"recommend_v4:{req.category[:30]}:{profile_hash}"
 
     if redis:
         try:
