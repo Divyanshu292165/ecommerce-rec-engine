@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import time
 import json
@@ -53,42 +54,43 @@ TRENDING_QUERIES = [
 
 
 def parse_price_to_inr(price_str: str) -> str:
-    """Convert Amazon price string like '$1,299.99' to formatted INR."""
+    """Parse Amazon India price string — already in INR format like '₹14,999'."""
     if not price_str:
         return None
+    return price_str.strip()
+
+
+def _strip_inr(price_str: str) -> float:
+    """Extract numeric value from an INR price string like '₹14,999' or '₹1,11,990'."""
+    if not price_str:
+        return 0.0
+    cleaned = price_str.replace("\u20b9", "").replace("Rs", "").replace(",", "").strip()
     try:
-        # Strip currency symbols, commas, spaces
-        cleaned = price_str.replace("$", "").replace(",", "").strip()
-        usd = float(cleaned)
-        inr = int(usd * USD_TO_INR)
-        return f"₹{inr:,}"
+        return float(cleaned)
     except Exception:
-        # If price is already in INR or unparseable, return as-is
-        if "₹" in price_str or "Rs" in price_str.lower():
-            return price_str
-        return price_str
+        return 0.0
 
 
 def analyze_deal(product: dict) -> dict:
+
     """
     Analyze whether to Buy Now or Wait based on discount data.
-    Returns a dict with: recommendation, badge, reason
+    Returns a dict with: recommendation, badge, reason.
+    Amazon India returns prices already in INR.
     """
-    original = product.get("product_original_price") or ""
-    current = product.get("product_price") or ""
+    original_str = product.get("product_original_price") or ""
+    current_str = product.get("product_price") or ""
     stars = product.get("product_star_rating")
     num_ratings = product.get("product_num_ratings") or 0
 
-    try:
-        orig_usd = float(original.replace("$", "").replace(",", "").strip()) if original else 0
-        curr_usd = float(current.replace("$", "").replace(",", "").strip()) if current else 0
-    except Exception:
-        orig_usd = 0
-        curr_usd = 0
+    orig_inr = _strip_inr(original_str)
+    curr_inr = _strip_inr(current_str)
 
     discount_pct = 0
-    if orig_usd > 0 and curr_usd > 0 and orig_usd > curr_usd:
-        discount_pct = round((orig_usd - curr_usd) / orig_usd * 100)
+    savings = 0
+    if orig_inr > 0 and curr_inr > 0 and orig_inr > curr_inr:
+        discount_pct = round((orig_inr - curr_inr) / orig_inr * 100)
+        savings = int(orig_inr - curr_inr)
 
     try:
         rating = float(stars) if stars else 0
@@ -98,28 +100,28 @@ def analyze_deal(product: dict) -> dict:
     # Deal scoring logic
     if discount_pct >= 30:
         return {
-            "recommendation": "🔥 BUY NOW",
+            "recommendation": "\U0001f525 BUY NOW",
             "badge": "hot-deal",
-            "reason": f"{discount_pct}% off — exceptional deal",
-            "savings_inr": f"₹{int((orig_usd - curr_usd) * USD_TO_INR):,}" if orig_usd > 0 else None,
+            "reason": f"{discount_pct}% off \u2014 exceptional deal",
+            "savings_inr": f"\u20b9{savings:,}" if savings > 0 else None,
         }
     elif discount_pct >= 15:
         return {
-            "recommendation": "✅ GOOD DEAL",
+            "recommendation": "\u2705 GOOD DEAL",
             "badge": "good-deal",
-            "reason": f"{discount_pct}% off — solid savings",
-            "savings_inr": f"₹{int((orig_usd - curr_usd) * USD_TO_INR):,}" if orig_usd > 0 else None,
+            "reason": f"{discount_pct}% off \u2014 solid savings",
+            "savings_inr": f"\u20b9{savings:,}" if savings > 0 else None,
         }
     elif discount_pct > 0 and discount_pct < 15:
         return {
-            "recommendation": "⏳ WAIT",
+            "recommendation": "\u23f3 WAIT",
             "badge": "wait",
-            "reason": f"Only {discount_pct}% off — price may drop more",
+            "reason": f"Only {discount_pct}% off \u2014 price may drop more",
             "savings_inr": None,
         }
     elif rating >= 4.5 and num_ratings > 1000:
         return {
-            "recommendation": "⭐ TOP RATED",
+            "recommendation": "\u2b50 TOP RATED",
             "badge": "top-rated",
             "reason": f"{rating}★ from {num_ratings:,} reviews",
             "savings_inr": None,

@@ -405,7 +405,9 @@ function searchCategory(cat) {
 
 // ===== INIT =====
 document.addEventListener("DOMContentLoaded", () => {
-  loadFavorites().then(() => {
-    fetchRecommendations();
-  });
+  // Start product load immediately — don't wait for favorites
+  fetchRecommendations();
+  // Load favorites in background (doesn't block the main spinner)
+  loadFavorites().catch(err => console.warn("Favorites load failed:", err));
 });
+
