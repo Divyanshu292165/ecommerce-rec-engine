@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from contextlib import asynccontextmanager
 import httpx
+import math
 
 # ─── Environment Variables ─────────────────────────────────────────────────────
 RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "")
@@ -22,6 +23,7 @@ redis = None
 if UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN:
     try:
         from upstash_redis.asyncio import Redis
+
         redis = Redis(url=UPSTASH_REDIS_REST_URL, token=UPSTASH_REDIS_REST_TOKEN)
     except Exception as e:
         print(f"Warning: Redis init failed: {e}")
@@ -31,6 +33,7 @@ try:
     from slowapi import Limiter, _rate_limit_exceeded_handler
     from slowapi.util import get_remote_address
     from slowapi.errors import RateLimitExceeded
+
     limiter = Limiter(key_func=get_remote_address)
     SLOWAPI_AVAILABLE = True
 except Exception:
@@ -109,12 +112,17 @@ DEMO_PRODUCTS = [
 ]
 
 
-def get_demo_products(limit: int = 12) -> list:
+def get_demo_products(
+    limit: int = 12, profile: dict | None = None, query: str = ""
+) -> list:
     """Return demo products so the UI remains usable without RapidAPI credentials."""
+    ranked = rank_products(
+        [map_product(product) for product in DEMO_PRODUCTS], profile, query
+    )
     products = []
     while len(products) < limit:
-        products.extend(DEMO_PRODUCTS)
-    return [map_product(product) for product in products[:limit]]
+        products.extend(ranked)
+    return products[:limit]
 
 
 def parse_price_to_inr(price_str: str) -> str:
@@ -136,7 +144,6 @@ def _strip_inr(price_str: str) -> float:
 
 
 def analyze_deal(product: dict) -> dict:
-
     """
     Analyze whether to Buy Now or Wait based on discount data.
     Returns a dict with: recommendation, badge, reason.
@@ -221,10 +228,127 @@ def map_product(p: dict) -> dict:
     }
 
 
-async def fetch_amazon_search(query: str, limit: int = 12) -> list:
+def infer_category(title: str) -> str:
+    title_l = title.lower()
+    category_terms = {
+        "laptops": ["laptop", "notebook", "ideapad", "macbook"],
+        "smartphones": ["phone", "smartphone", "galaxy", "iphone", "redmi", "oneplus"],
+        "audio": ["earbuds", "headphone", "speaker", "airpod", "airdopes"],
+        "accessories": ["mouse", "keyboard", "charger", "cable", "gaming"],
+        "smart home": ["smart home", "alexa", "echo", "camera", "bulb"],
+    }
+    for category, terms in category_terms.items():
+        if any(term in title_l for term in terms):
+            return category
+    return "electronics"
+
+
+def _discount_pct(product: dict) -> int:
+    original = _strip_inr(product.get("original_price") or "")
+    current = _strip_inr(product.get("price") or "")
+    if original > 0 and current > 0 and original > current:
+        return round((original - current) / original * 100)
+    return 0
+
+
+def _profile_values(profile: dict | None, key: str) -> list:
+    value = (profile or {}).get(key) or []
+    if isinstance(value, str):
+        return [value.lower()]
+    return [str(item).lower() for item in value if item]
+
+
+def personalize_product(
+    product: dict, profile: dict | None = None, query: str = ""
+) -> dict:
+    """Attach recommendation score and human-readable reasons to a product."""
+    profile = profile or {}
+    title = product.get("title") or ""
+    title_l = title.lower()
+    brand = (product.get("brand") or "").lower()
+    category = infer_category(title)
+    price = _strip_inr(product.get("price") or "")
+    discount_pct = _discount_pct(product)
+
+    score = 0.0
+    reasons = []
+
+    try:
+        rating = float(product.get("rating") or 0)
+    except Exception:
+        rating = 0
+    num_ratings = int(product.get("num_ratings") or 0)
+
+    if rating:
+        score += rating * 12
+        if rating >= 4.2:
+            reasons.append(f"{rating:.1f} star rating")
+
+    if num_ratings:
+        score += min(math.log10(num_ratings + 1) * 8, 36)
+        if num_ratings >= 1000:
+            reasons.append(f"{num_ratings:,} reviews")
+
+    if discount_pct:
+        score += min(discount_pct, 45)
+        if discount_pct >= 15:
+            reasons.append(f"{discount_pct}% discount")
+
+    budget_max = profile.get("budget_max")
+    try:
+        budget_max = float(budget_max) if budget_max else 0
+    except Exception:
+        budget_max = 0
+    if budget_max and price:
+        if price <= budget_max:
+            score += 25
+            reasons.append("fits your budget")
+        elif price <= budget_max * 1.15:
+            score += 8
+            reasons.append("close to your budget")
+        else:
+            score -= 20
+
+    preferred_brands = _profile_values(profile, "preferred_brands")
+    if brand and brand in preferred_brands:
+        score += 24
+        reasons.append(f"matches {product.get('brand')} preference")
+
+    preferred_categories = _profile_values(profile, "preferred_categories")
+    if category in preferred_categories:
+        score += 26
+        reasons.append(f"matches your {category} interest")
+
+    query_terms = [term for term in query.lower().split() if len(term) > 2]
+    query_matches = sum(1 for term in query_terms if term in title_l)
+    if query_matches:
+        score += query_matches * 7
+        reasons.append("matches your search")
+
+    if not reasons:
+        reasons.append("popular electronics pick")
+
+    product["category"] = category
+    product["recommendation_score"] = round(score, 2)
+    product["recommendation_reasons"] = reasons[:3]
+    return product
+
+
+def rank_products(products: list, profile: dict | None = None, query: str = "") -> list:
+    personalized = [
+        personalize_product(product, profile, query) for product in products
+    ]
+    return sorted(
+        personalized, key=lambda item: item.get("recommendation_score", 0), reverse=True
+    )
+
+
+async def fetch_amazon_search(
+    query: str, limit: int = 12, profile: dict | None = None
+) -> list:
     """Fetch products from RapidAPI Amazon search endpoint."""
     if not RAPIDAPI_KEY:
-        return get_demo_products(limit)
+        return get_demo_products(limit, profile, query)
 
     headers = {
         "X-RapidAPI-Key": RAPIDAPI_KEY,
@@ -249,10 +373,12 @@ async def fetch_amazon_search(query: str, limit: int = 12) -> list:
             resp.raise_for_status()
             data = resp.json()
             products = data.get("data", {}).get("products", [])
-            return [map_product(p) for p in products[:limit]]
+            return rank_products([map_product(p) for p in products], profile, query)[
+                :limit
+            ]
     except Exception as e:
         print(f"RapidAPI search error for '{query}': {e}")
-        return get_demo_products(limit)
+        return get_demo_products(limit, profile, query)
 
 
 # ─── Lifespan ─────────────────────────────────────────────────────────────────
@@ -284,6 +410,7 @@ app.add_middleware(
 # Optional Prometheus metrics
 try:
     from prometheus_fastapi_instrumentator import Instrumentator
+
     Instrumentator().instrument(app).expose(app)
 except Exception:
     pass
@@ -293,6 +420,8 @@ except Exception:
 class SearchRequest(BaseModel):
     query: str
     limit: int = Field(default=12, ge=1, le=50)
+    user_profile: dict | None = None
+
 
 class TrackProductRequest(BaseModel):
     asin: str
@@ -308,6 +437,7 @@ class TrackProductRequest(BaseModel):
 class RecommendRequest(BaseModel):
     limit: int = Field(default=12, ge=1, le=50)
     category: str = Field(default="trending electronics")
+    user_profile: dict | None = None
 
 
 # ─── Endpoints ────────────────────────────────────────────────────────────────
@@ -336,7 +466,10 @@ async def health():
 async def search(request: Request, req: SearchRequest):
     """Search Amazon for products matching the query."""
     start_ts = time.time()
-    cache_key = f"search_v2:{hashlib.sha256(req.query.encode()).hexdigest()[:16]}"
+    profile_hash = hashlib.sha256(
+        json.dumps(req.user_profile or {}, sort_keys=True).encode()
+    ).hexdigest()[:10]
+    cache_key = f"search_v3:{hashlib.sha256(req.query.encode()).hexdigest()[:16]}:{profile_hash}"
 
     # Try Redis cache first
     if redis:
@@ -352,7 +485,7 @@ async def search(request: Request, req: SearchRequest):
         except Exception as e:
             print(f"Redis GET error: {e}")
 
-    products = await fetch_amazon_search(req.query, req.limit)
+    products = await fetch_amazon_search(req.query, req.limit, req.user_profile)
 
     # Cache for 10 minutes
     if redis:
@@ -373,7 +506,10 @@ async def search(request: Request, req: SearchRequest):
 async def recommend(request: Request, req: RecommendRequest):
     """Fetch trending/popular electronics from Amazon as homepage recommendations."""
     start_ts = time.time()
-    cache_key = f"recommend_v2:{req.category[:30]}"
+    profile_hash = hashlib.sha256(
+        json.dumps(req.user_profile or {}, sort_keys=True).encode()
+    ).hexdigest()[:10]
+    cache_key = f"recommend_v3:{req.category[:30]}:{profile_hash}"
 
     if redis:
         try:
@@ -387,7 +523,7 @@ async def recommend(request: Request, req: RecommendRequest):
         except Exception as e:
             print(f"Redis GET error: {e}")
 
-    products = await fetch_amazon_search(req.category, req.limit)
+    products = await fetch_amazon_search(req.category, req.limit, req.user_profile)
 
     # Cache trending for 30 minutes
     if redis:
@@ -408,7 +544,7 @@ async def add_favorite(user_id: str, product: TrackProductRequest):
     """Save a product to the user's favorites list in Redis."""
     if not redis:
         raise HTTPException(status_code=500, detail="Redis is not configured")
-    
+
     key = f"favorites:{user_id}"
     try:
         await redis.hset(key, product.asin, product.model_dump_json())
@@ -423,7 +559,7 @@ async def get_favorites(user_id: str):
     """Get all saved products for a user."""
     if not redis:
         return {"results": []}
-    
+
     key = f"favorites:{user_id}"
     try:
         favorites = await redis.hgetall(key)
@@ -441,7 +577,7 @@ async def delete_favorite(user_id: str, asin: str):
     """Remove a saved product."""
     if not redis:
         raise HTTPException(status_code=500, detail="Redis is not configured")
-    
+
     key = f"favorites:{user_id}"
     try:
         await redis.hdel(key, asin)
@@ -455,52 +591,64 @@ async def refresh_favorites(user_id: str):
     """Fetch live prices for tracked items and check for drops."""
     if not redis:
         raise HTTPException(status_code=500, detail="Redis not configured")
-    
+
     key = f"favorites:{user_id}"
     favorites = await redis.hgetall(key)
     if not favorites:
         return {"results": [], "alerts": []}
-    
+
     headers = {
         "X-RapidAPI-Key": RAPIDAPI_KEY,
         "X-RapidAPI-Host": RAPIDAPI_HOST,
     }
-    
+
     updated_results = []
     alerts = []
-    
+
     async with httpx.AsyncClient(timeout=15.0) as client:
         for asin, prod_json in favorites.items():
             prod = json.loads(prod_json)
             params = {"asin": asin, "country": "IN"}
             try:
-                resp = await client.get(f"{RAPIDAPI_BASE}/product-details", headers=headers, params=params)
+                resp = await client.get(
+                    f"{RAPIDAPI_BASE}/product-details", headers=headers, params=params
+                )
                 if resp.status_code == 200:
                     data = resp.json().get("data", {})
                     new_price_str = data.get("product_price")
                     if new_price_str:
                         new_inr = parse_price_to_inr(new_price_str)
                         old_inr = prod.get("price")
-                        
-                        old_val = int("".join(filter(str.isdigit, str(old_inr)))) if old_inr else 0
-                        new_val = int("".join(filter(str.isdigit, str(new_inr)))) if new_inr else 0
-                        
+
+                        old_val = (
+                            int("".join(filter(str.isdigit, str(old_inr))))
+                            if old_inr
+                            else 0
+                        )
+                        new_val = (
+                            int("".join(filter(str.isdigit, str(new_inr))))
+                            if new_inr
+                            else 0
+                        )
+
                         if new_val > 0 and old_val > 0 and new_val < old_val:
-                            alerts.append({
-                                "asin": asin,
-                                "title": prod.get("title"),
-                                "old_price": old_inr,
-                                "new_price": new_inr,
-                                "drop": old_val - new_val
-                            })
-                            
+                            alerts.append(
+                                {
+                                    "asin": asin,
+                                    "title": prod.get("title"),
+                                    "old_price": old_inr,
+                                    "new_price": new_inr,
+                                    "drop": old_val - new_val,
+                                }
+                            )
+
                         prod["price"] = new_inr
                         await redis.hset(key, asin, json.dumps(prod))
-                        
+
             except Exception as e:
                 print(f"Error refreshing {asin}: {e}")
-                
+
             updated_results.append(prod)
             await asyncio.sleep(0.5)
-            
+
     return {"results": updated_results, "alerts": alerts}

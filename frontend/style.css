@@ -256,6 +256,74 @@ input { font-family: inherit; outline: none; }
   font-size: 16px;
 }
 
+.preference-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin: -28px auto 44px;
+  padding: 14px;
+  max-width: 860px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: rgba(15, 15, 24, 0.72);
+  backdrop-filter: blur(12px);
+}
+
+.preference-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+}
+
+.preference-label {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.preference-group select {
+  height: 38px;
+  min-width: 150px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  padding: 0 10px;
+}
+
+.preference-group select option {
+  background: #111827;
+}
+
+.chip-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pref-chip {
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 99px;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 13px;
+  font-weight: 700;
+  transition: var(--transition);
+}
+
+.pref-chip.active,
+.pref-chip:hover {
+  color: var(--text-primary);
+  border-color: rgba(139, 92, 246, 0.7);
+  background: rgba(139, 92, 246, 0.2);
+}
+
 .loading-state {
   display: flex;
   flex-direction: column;
@@ -382,8 +450,25 @@ input { font-family: inherit; outline: none; }
 .product-price {
   font-size: 24px;
   font-weight: 700;
-  margin-bottom: 24px;
+  margin-bottom: 8px;
   margin-top: auto;
+}
+
+.recommendation-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 14px;
+}
+
+.reason-pill {
+  padding: 4px 8px;
+  border-radius: 99px;
+  background: rgba(59, 130, 246, 0.14);
+  color: #bfdbfe;
+  border: 1px solid rgba(59, 130, 246, 0.24);
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .product-actions {

@@ -68,6 +68,28 @@
         <p class="store-desc" id="storeDesc">Dynamically generated based on your unique AI profile.</p>
       </div>
 
+      <div class="preference-panel" aria-label="Recommendation preferences">
+        <div class="preference-group">
+          <span class="preference-label">Budget</span>
+          <select id="budgetSelect">
+            <option value="">Any price</option>
+            <option value="2000">Under ₹2,000</option>
+            <option value="10000">Under ₹10,000</option>
+            <option value="25000">Under ₹25,000</option>
+            <option value="60000">Under ₹60,000</option>
+          </select>
+        </div>
+        <div class="preference-group">
+          <span class="preference-label">Interests</span>
+          <div class="chip-row" id="categoryChips">
+            <button class="pref-chip" data-category="smartphones">Phones</button>
+            <button class="pref-chip" data-category="laptops">Laptops</button>
+            <button class="pref-chip" data-category="audio">Audio</button>
+            <button class="pref-chip" data-category="accessories">Accessories</button>
+          </div>
+        </div>
+      </div>
+
       <!-- Loading State -->
       <div id="loadingState" class="loading-state">
         <div class="spinner"></div>

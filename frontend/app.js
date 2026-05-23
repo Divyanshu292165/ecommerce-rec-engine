@@ -15,6 +15,53 @@ if (!USER_ID) {
 
 let favorites = {}; // asin -> product mapping
 let currentProducts = []; // Array of products currently displayed in main store
+let userProfile = loadUserProfile();
+
+function loadUserProfile() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("neuralshop_profile") || "{}");
+    return {
+      budget_max: saved.budget_max || "",
+      preferred_categories: Array.isArray(saved.preferred_categories) ? saved.preferred_categories : [],
+      preferred_brands: Array.isArray(saved.preferred_brands) ? saved.preferred_brands : [],
+    };
+  } catch {
+    return { budget_max: "", preferred_categories: [], preferred_brands: [] };
+  }
+}
+
+function saveUserProfile() {
+  localStorage.setItem("neuralshop_profile", JSON.stringify(userProfile));
+}
+
+function syncPreferenceControls() {
+  const budgetSelect = document.getElementById("budgetSelect");
+  if (budgetSelect) budgetSelect.value = userProfile.budget_max || "";
+
+  document.querySelectorAll("[data-category]").forEach(chip => {
+    chip.classList.toggle("active", userProfile.preferred_categories.includes(chip.dataset.category));
+  });
+}
+
+function buildRequestProfile() {
+  return {
+    budget_max: userProfile.budget_max,
+    preferred_categories: userProfile.preferred_categories,
+    preferred_brands: userProfile.preferred_brands,
+  };
+}
+
+function learnFromProduct(product) {
+  if (!product) return;
+  if (product.category && !userProfile.preferred_categories.includes(product.category)) {
+    userProfile.preferred_categories = [product.category, ...userProfile.preferred_categories].slice(0, 4);
+  }
+  if (product.brand && !userProfile.preferred_brands.includes(product.brand.toLowerCase())) {
+    userProfile.preferred_brands = [product.brand.toLowerCase(), ...userProfile.preferred_brands].slice(0, 5);
+  }
+  saveUserProfile();
+  syncPreferenceControls();
+}
 
 // ===== NAVBAR SCROLL EFFECT =====
 const navbar = document.getElementById("navbar");
@@ -90,6 +137,7 @@ async function toggleFavorite(e, index, isFromFavPage = false) {
   }
   
   if (!p) return;
+  learnFromProduct(p);
   if (!p.asin) p.asin = btoa(p.title).slice(0, 15).replace(/[^a-zA-Z0-9]/g, ''); // Fallback ASIN
 
   const isTracked = !!favorites[p.asin];
@@ -214,6 +262,20 @@ function getDealBadgeHTML(deal) {
   `;
 }
 
+function getRecommendationReasonsHTML(p) {
+  const reasons = Array.isArray(p.recommendation_reasons) ? p.recommendation_reasons : [];
+  if (!reasons.length) return "";
+  return `
+    <div class="recommendation-reasons">
+      ${reasons.map(reason => `<span class="reason-pill">${reason}</span>`).join("")}
+    </div>
+  `;
+}
+
+function trackProductInterest(index) {
+  if (typeof index === "number") learnFromProduct(currentProducts[index]);
+}
+
 // ===== CARD GENERATOR =====
 function generateProductCardHTML(p, index, isFromFavPage = false) {
   const title = p.title || "Unknown Product";
@@ -227,6 +289,7 @@ function generateProductCardHTML(p, index, isFromFavPage = false) {
   const numRatings = p.num_ratings ? `<span class="product-num-ratings">(${Number(p.num_ratings).toLocaleString()})</span>` : "";
   const primeBadge = p.is_prime ? `<span class="prime-badge">prime</span>` : "";
   const dealHTML = getDealBadgeHTML(p.deal);
+  const reasonsHTML = getRecommendationReasonsHTML(p);
   
   const pAsin = p.asin || btoa(p.title).slice(0,15).replace(/[^a-zA-Z0-9]/g, '');
   const isTracked = !!favorites[pAsin];
@@ -260,9 +323,10 @@ function generateProductCardHTML(p, index, isFromFavPage = false) {
           <div class="product-price">${price}</div>
           ${originalPrice}
         </div>
+        ${reasonsHTML}
         ${rating || numRatings ? `<div class="product-meta">${rating} ${numRatings}</div>` : ""}
         <div class="product-actions">
-          <a href="${url}" target="_blank" rel="noopener" class="btn-buy btn-amazon">
+          <a href="${url}" target="_blank" rel="noopener" class="btn-buy btn-amazon" onclick="trackProductInterest(${index})">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M20.9 14.5c-.1-.1-1.4-1.1-2.9-.6-1 .3-1.5.9-1.5.9s-.6-1.2-1.8-1.6c-1-.3-2.2 0-3.3.9-1.2.9-1.7 2.3-1.5 3.8.3 1.5 1.2 2.7 2.6 3.3 1.4.6 3.1.4 4.3-.5 1.2-.9 1.7-2.4 1.4-3.8h.1s.7.5 1.5.4c.8-.1 1.5-.6 1.7-1.4.1-.4-.1-.9-.6-1.4zm-6.3 4.8c-.5.4-1.3.6-2 .3-.7-.3-1.1-.9-1.3-1.6-.2-.7 0-1.5.5-2 .5-.5 1.2-.7 1.9-.5.7.2 1.2.7 1.4 1.4.2.7 0 1.5-.5 2.1v.3z"/></svg>
             Buy on Amazon
           </a>
@@ -331,7 +395,11 @@ async function fetchRecommendations() {
     const res = await fetch(`${API_BASE}/recommend`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ limit: 12, category: "trending electronics", user_id: DUMMY_USER_ID }),
+      body: JSON.stringify({
+        limit: 12,
+        category: "trending electronics",
+        user_profile: buildRequestProfile(),
+      }),
     });
 
     if (!res.ok) {
@@ -375,7 +443,11 @@ async function fetchSearch() {
     const res = await fetch(`${API_BASE}/search`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: query, limit: 12, user_id: DUMMY_USER_ID }),
+      body: JSON.stringify({
+        query: query,
+        limit: 12,
+        user_profile: buildRequestProfile(),
+      }),
     });
 
     if (!res.ok) {
@@ -409,6 +481,25 @@ function searchCategory(cat) {
 
 // ===== INIT =====
 document.addEventListener("DOMContentLoaded", () => {
+  syncPreferenceControls();
+  document.getElementById("budgetSelect")?.addEventListener("change", (e) => {
+    userProfile.budget_max = e.target.value;
+    saveUserProfile();
+    fetchRecommendations();
+  });
+  document.querySelectorAll("[data-category]").forEach(chip => {
+    chip.addEventListener("click", () => {
+      const category = chip.dataset.category;
+      if (userProfile.preferred_categories.includes(category)) {
+        userProfile.preferred_categories = userProfile.preferred_categories.filter(item => item !== category);
+      } else {
+        userProfile.preferred_categories = [category, ...userProfile.preferred_categories].slice(0, 4);
+      }
+      saveUserProfile();
+      syncPreferenceControls();
+      fetchRecommendations();
+    });
+  });
   // Start product load immediately — don't wait for favorites
   fetchRecommendations();
   // Load favorites in background (doesn't block the main spinner)
