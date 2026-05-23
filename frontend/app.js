@@ -1,6 +1,8 @@
 // ===== CONFIGURATION =====
 const API_BASE = window.location.origin.startsWith("http")
-  ? window.location.origin
+  ? (window.location.hostname.endsWith("vercel.app")
+      ? "https://ecommerce-rec-engine.onrender.com"
+      : window.location.origin)
   : "http://localhost:8000";
 const DUMMY_USER_ID = Math.floor(Math.random() * 5000) + 1;
 
